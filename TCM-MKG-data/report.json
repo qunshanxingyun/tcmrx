@@ -1,0 +1,469 @@
+{
+  "D10_Pharmacognostic_origin.tsv": {
+    "headers": [
+      "kingdom_Name",
+      "kingdom_ID",
+      "phylum_Name",
+      "phylum_ID",
+      "class_Name",
+      "class_ID",
+      "order_Name",
+      "order_ID",
+      "family_Name",
+      "family_ID",
+      "genus_Name",
+      "genus_ID",
+      "species_name",
+      "species_ID"
+    ],
+    "expected_minimal": [
+      "species_ID",
+      "species_name",
+      "kingdom_Name",
+      "phylum_Name",
+      "class_Name",
+      "order_Name",
+      "family_Name",
+      "genus_Name"
+    ],
+    "missing_expected": [],
+    "fuzzy_suggestions": {},
+    "extra_hints": []
+  },
+  "D11_PO_InChIKey.tsv": {
+    "headers": [
+      "SpeciesID",
+      "InChIKey",
+      "Source"
+    ],
+    "expected_minimal": [
+      "SpeciesID",
+      "InChIKey",
+      "Source"
+    ],
+    "missing_expected": [],
+    "fuzzy_suggestions": {},
+    "extra_hints": []
+  },
+  "D12_InChIKey.tsv": {
+    "headers": [
+      "InChIKey",
+      "SMILES",
+      "InChI",
+      "Molecular_Formula",
+      "Chiral_Scaffold",
+      "Achiral_Scaffold",
+      "QED",
+      "MolWt",
+      "ExactMolWt",
+      "TPSA",
+      "MolLogP",
+      "NumHAcceptors",
+      "NumHDonors",
+      "NumRotatableBonds",
+      "MolMR",
+      "FractionCSP3",
+      "Pathway1",
+      "Pathway2",
+      "Pathway3",
+      "Superclass1",
+      "Superclass2",
+      "Superclass3",
+      "Class1",
+      "Class2",
+      "Class3",
+      "IsGlycoside"
+    ],
+    "expected_minimal": [
+      "InChIKey",
+      "SMILES",
+      "InChI",
+      "Molecular_formula",
+      "QED",
+      "MolWt",
+      "TPSA",
+      "MolLogP",
+      "NumHAcceptors",
+      "NumHDonors"
+    ],
+    "missing_expected": [
+      "Molecular_formula"
+    ],
+    "fuzzy_suggestions": {
+      "Molecular_formula": "Molecular_Formula"
+    },
+    "extra_hints": []
+  },
+  "D13_InChIKey_EntrezID.tsv": {
+    "headers": [
+      "InChIKey",
+      "EntrezID"
+    ],
+    "expected_minimal": [
+      "InChIKey",
+      "EntrezID"
+    ],
+    "missing_expected": [],
+    "fuzzy_suggestions": {},
+    "extra_hints": []
+  },
+  "D14_InChIKey_SourceID.tsv": {
+    "headers": [
+      "InChIKey",
+      "SourceID",
+      "Source"
+    ],
+    "expected_minimal": [
+      "InChIKey",
+      "Source",
+      "SourceID"
+    ],
+    "missing_expected": [],
+    "fuzzy_suggestions": {},
+    "extra_hints": []
+  },
+  "D15_InChIKey_distance.tsv": {
+    "headers": [
+      "InChIKey",
+      "Descriptors1",
+      "Descriptors2",
+      "Fingerprints1",
+      "Fingerprints2",
+      "GAT1",
+      "GAT2",
+      "GAE1",
+      "GAE2",
+      "GCN1",
+      "GCN2"
+    ],
+    "expected_minimal": [
+      "InChIKey1",
+      "InChIKey2",
+      "Distance"
+    ],
+    "missing_expected": [
+      "InChIKey1",
+      "InChIKey2",
+      "Distance"
+    ],
+    "fuzzy_suggestions": {},
+    "extra_hints": []
+  },
+  "D16_Protein_protein_interactions.tsv": {
+    "headers": [
+      "EntrezID1",
+      "EntrezID2"
+    ],
+    "expected_minimal": [],
+    "missing_expected": [],
+    "fuzzy_suggestions": {},
+    "extra_hints": []
+  },
+  "D17_Target_Symbol_Mapping.tsv": {
+    "headers": [
+      "UniProtID",
+      "GeneSymbol",
+      "EntrezID",
+      "ENSGID",
+      "Sequence"
+    ],
+    "expected_minimal": [
+      "EntrezID",
+      "UniProtID",
+      "GeneSymbol",
+      "ENSGID"
+    ],
+    "missing_expected": [],
+    "fuzzy_suggestions": {},
+    "extra_hints": []
+  },
+  "D18_ICD11.tsv": {
+    "headers": [
+      "ICD11_code",
+      "BlockId",
+      "English_term",
+      "Chinese_term",
+      "ClassKind",
+      "DepthInKind",
+      "IsResidual",
+      "ChapterNo",
+      "BrowserLink",
+      "isLeaf",
+      "Primary tabulation",
+      "Grouping1",
+      "Grouping2",
+      "Grouping3",
+      "Grouping4",
+      "Grouping5",
+      "Version:2024 Jan 21 22:30 UTC"
+    ],
+    "expected_minimal": [
+      "ICD11_code",
+      "English_term",
+      "Chinese_term",
+      "ClassKind"
+    ],
+    "missing_expected": [],
+    "fuzzy_suggestions": {},
+    "extra_hints": []
+  },
+  "D19_ICD11_CUI.tsv": {
+    "headers": [
+      "ICD11_code",
+      "CUI",
+      "Semantic_type",
+      "Term"
+    ],
+    "expected_minimal": [
+      "ICD11_code",
+      "CUI"
+    ],
+    "missing_expected": [],
+    "fuzzy_suggestions": {},
+    "extra_hints": []
+  },
+  "D1_TCM_terminology.tsv": {
+    "headers": [
+      "TCMT_ID",
+      "Chinese_group",
+      "English_group",
+      "Chinese_term",
+      "Pinyin_term",
+      "Chinese_synonyms",
+      "English_term",
+      "Synonyms",
+      "English_definition_description"
+    ],
+    "expected_minimal": [
+      "TCMT_ID",
+      "Chinese_group",
+      "English_group",
+      "Chinese_term",
+      "English_term"
+    ],
+    "missing_expected": [],
+    "fuzzy_suggestions": {},
+    "extra_hints": []
+  },
+  "D20_ICD11_MeSH.tsv": {
+    "headers": [
+      "ICD11_code",
+      "MeSH"
+    ],
+    "expected_minimal": [
+      "ICD11_code",
+      "MeSH"
+    ],
+    "missing_expected": [],
+    "fuzzy_suggestions": {},
+    "extra_hints": []
+  },
+  "D21_ICD11_DOID.tsv": {
+    "headers": [
+      "ICD11_code",
+      "DOID"
+    ],
+    "expected_minimal": [
+      "ICD11_code",
+      "DOID"
+    ],
+    "missing_expected": [],
+    "fuzzy_suggestions": {},
+    "extra_hints": []
+  },
+  "D22_CUI_targets.tsv": {
+    "headers": [
+      "CUI",
+      "EntrezID"
+    ],
+    "expected_minimal": [
+      "CUI",
+      "EntrezID"
+    ],
+    "missing_expected": [],
+    "fuzzy_suggestions": {},
+    "extra_hints": []
+  },
+  "D23_MeSH_targets.tsv": {
+    "headers": [
+      "MeSH",
+      "EntrezID"
+    ],
+    "expected_minimal": [
+      "MeSH",
+      "EntrezID"
+    ],
+    "missing_expected": [],
+    "fuzzy_suggestions": {},
+    "extra_hints": []
+  },
+  "D24_DOID_targets.tsv": {
+    "headers": [
+      "DOID",
+      "EntrezID"
+    ],
+    "expected_minimal": [
+      "DOID",
+      "EntrezID"
+    ],
+    "missing_expected": [],
+    "fuzzy_suggestions": {},
+    "extra_hints": []
+  },
+  "D2_Chinese_patent_medicine.tsv": {
+    "headers": [
+      "CPM_ID",
+      "Chinese_patent_medicine",
+      "Pinyin_term",
+      "Routes_of_administration"
+    ],
+    "expected_minimal": [
+      "CPM_ID",
+      "Chinese_patent_medicine",
+      "Pinyin_term",
+      "Routes_of_administration"
+    ],
+    "missing_expected": [],
+    "fuzzy_suggestions": {},
+    "extra_hints": []
+  },
+  "D3_CPM_TCMT.tsv": {
+    "headers": [
+      "CPM_ID",
+      "TCMT_ID",
+      "Chinese_group",
+      "English_group",
+      "Chinese_term",
+      "Pinyin_term",
+      "English_term",
+      "Synonyms"
+    ],
+    "expected_minimal": [
+      "CPM_ID",
+      "TCMT_ID"
+    ],
+    "missing_expected": [],
+    "fuzzy_suggestions": {},
+    "extra_hints": []
+  },
+  "D4_CPM_CHP.tsv": {
+    "headers": [
+      "CPM_ID",
+      "CHP_ID",
+      "Dosage_ratio"
+    ],
+    "expected_minimal": [
+      "CPM_ID",
+      "CHP_ID",
+      "Dosage_ratio"
+    ],
+    "missing_expected": [],
+    "fuzzy_suggestions": {},
+    "extra_hints": []
+  },
+  "D5_CPM_ICD11.tsv": {
+    "headers": [
+      "CPM_ID",
+      "ICD11_code"
+    ],
+    "expected_minimal": [
+      "CPM_ID",
+      "ICD11_code"
+    ],
+    "missing_expected": [],
+    "fuzzy_suggestions": {},
+    "extra_hints": []
+  },
+  "D6_Chinese_herbal_pieces.tsv": {
+    "headers": [
+      "CHP_ID",
+      "Chinese_herbal_pieces",
+      "Chinese_synonyms",
+      "Pinyin_term",
+      "English_term",
+      "Sources"
+    ],
+    "expected_minimal": [
+      "CHP_ID",
+      "Chinese_herbal_pieces",
+      "Pinyin_term",
+      "English_term",
+      "Sources"
+    ],
+    "missing_expected": [],
+    "fuzzy_suggestions": {},
+    "extra_hints": []
+  },
+  "D7_CHP_Medicinal_properties.tsv": {
+    "headers": [
+      "CHP_ID",
+      "Medicinal_properties",
+      "Class",
+      "x_rank",
+      "y_rank"
+    ],
+    "expected_minimal": [
+      "CHP_ID",
+      "Medicinal_properties",
+      "Class",
+      "x_rank",
+      "y_rank"
+    ],
+    "missing_expected": [],
+    "fuzzy_suggestions": {},
+    "extra_hints": []
+  },
+  "D8_CHP_PO.tsv": {
+    "headers": [
+      "CHP_ID",
+      "Sources",
+      "species_name",
+      "species_ID"
+    ],
+    "expected_minimal": [
+      "CHP_ID",
+      "species_ID",
+      "species_name",
+      "Sources"
+    ],
+    "missing_expected": [],
+    "fuzzy_suggestions": {},
+    "extra_hints": []
+  },
+  "D9_CHP_InChIKey.tsv": {
+    "headers": [
+      "CHP_ID",
+      "InChIKey",
+      "Source"
+    ],
+    "expected_minimal": [
+      "CHP_ID",
+      "InChIKey",
+      "Source"
+    ],
+    "missing_expected": [],
+    "fuzzy_suggestions": {},
+    "extra_hints": []
+  },
+  "SD1_predicted_InChIKey_EntrezID.tsv": {
+    "headers": [
+      "InChIKey",
+      "EntrezID",
+      "predicted_binding_affinity"
+    ],
+    "expected_minimal": [
+      "InChIKey",
+      "EntrezID",
+      "Predicted_binding_affinity"
+    ],
+    "missing_expected": [
+      "Predicted_binding_affinity"
+    ],
+    "fuzzy_suggestions": {
+      "Predicted_binding_affinity": "predicted_binding_affinity"
+    },
+    "extra_hints": [
+      "Use 'Predicted_binding_affinity' (Cypher should read this exact case)."
+    ]
+  }
+}
