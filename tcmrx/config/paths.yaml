@@ -1,0 +1,54 @@
+# TCM-RX 数据文件路径配置
+# 所有TSV文件的路径（绝对路径或相对路径均可）
+
+# 数据根目录
+data_root: "TCM-MKG-data"
+
+# 方剂侧相关文件
+formulas:
+  # 中成药基础信息
+  D2_CPM: "${data_root}/D2_Chinese_patent_medicine.tsv"
+  # 中成药↔中药饮片
+  D4_CPM_CHP: "${data_root}/D4_CPM_CHP.tsv"
+  # 中成药↔ICD11（监督对）
+  D5_CPM_ICD11: "${data_root}/D5_CPM_ICD11.tsv"
+  # 中药饮片主表
+  D6_CHP: "${data_root}/D6_Chinese_herbal_pieces.tsv"
+  # 中药饮片↔化合物
+  D9_CHP_InChIKey: "${data_root}/D9_CHP_InChIKey.tsv"
+  # 化合物详细信息
+  D12_InChIKey: "${data_root}/D12_InChIKey.tsv"
+
+# 疾病侧相关文件
+diseases:
+  # ICD11基础信息
+  D18_ICD11: "${data_root}/D18_ICD11.tsv"
+  # ICD11↔CUI
+  D19_ICD11_CUI: "${data_root}/D19_ICD11_CUI.tsv"
+  # ICD11↔MeSH
+  D20_ICD11_MeSH: "${data_root}/D20_ICD11_MeSH.tsv"
+  # ICD11↔DOID（可选）
+  D21_ICD11_DOID: "${data_root}/D21_ICD11_DOID.tsv"
+
+# 靶点相关文件
+targets:
+  # CUI↔靶点
+  D22_CUI_targets: "${data_root}/D22_CUI_targets.tsv"
+  # MeSH↔靶点
+  D23_MeSH_targets: "${data_root}/D23_MeSH_targets.tsv"
+  # DOID↔靶点（可选）
+  D24_DOID_targets: "${data_root}/D24_DOID_targets.tsv"
+  # 靶点映射信息
+  D17_Target_Symbol_Mapping: "${data_root}/D17_Target_Symbol_Mapping.tsv"
+
+# 化合物-靶点预测文件
+predictions:
+  # 预测亲和力
+  SD1_predicted: "${data_root}/SD1_predicted_InChIKey_EntrezID.tsv"
+  # 实验边（可选）
+  D13_InChIKey_EntrezID: "${data_root}/D13_InChIKey_EntrezID.tsv"
+
+# 输出目录
+output:
+  log_dir: "logs"
+  checkpoint_dir: "checkpoints"

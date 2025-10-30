@@ -24,6 +24,7 @@ Thumbs.db
 lightning_logs/
 checkpoints/
 runs/
+backup/
 outputs/
 *.tsv
 data/

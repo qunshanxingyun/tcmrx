@@ -1,0 +1,50 @@
+# TCM-RX 优化配置 - 针对性能问题调优
+# 基于第一次训练结果的优化方案
+
+# 训练超参数 - 大幅调整
+training:
+  batch_size: 128        # 减小batch size，提高更新频率
+  epochs: 100           # 增加训练轮数
+  lr: 0.001            # 增大学习率10倍，从1e-4到1e-3
+  weight_decay: 0.0001  # 增大权重衰减10倍，防止过拟合
+  seed: 42
+  device: "auto"
+  mixed_precision: true  # 启用混合精度，加快训练
+  eval_every: 2         # 更频繁评估
+  log_every: 50         # 更频繁日志
+
+# 模型超参数 - 关键调整
+model:
+  embedding_dim: 512    # 增大嵌入维度，从256到512
+  temperature: 0.05     # 减小温度，从0.1到0.05，增加区分度
+  dropout_rate: 0.2    # 增加dropout，防止过拟合
+  aggregator_type: "attention"  # 保持注意力聚合
+
+# 过滤和截断参数 - 放宽限制
+filtering:
+  # 放宽Top-K限制，增加数据量
+  topk_d: 2000         # 疾病侧靶点数量限制，从1000到2000
+  topk_f: 5000         # 方剂侧靶点数量限制，从3000到5000
+  topk_c: 25           # 每个化合物的靶点数量限制，从15到25
+
+  # 降低SD1预测过滤阈值
+  pki_threshold: 5.5   # 降低亲和力阈值，从6.0到5.5
+  use_experimental_edges: true
+
+  # 调整加权参数
+  dosage_temperature: 0.5  # 降低剂量softmax温度，增加区分度
+  inverse_freq_weight: true
+
+# 数据划分参数 - 调整比例
+split:
+  train_ratio: 0.7     # 增加训练集比例
+  val_ratio: 0.15      # 增加验证集比例
+  test_ratio: 0.15     # 减少测试集比例
+  cold_start_eval: false  # 暂时关闭冷启动评估，专注主任务
+
+# 日志和保存
+logging:
+  log_dir: "logs"
+  checkpoint_dir: "checkpoints"
+  experiment_name: null
+  save_best_only: true
