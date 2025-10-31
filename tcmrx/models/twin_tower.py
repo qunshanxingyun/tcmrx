@@ -208,16 +208,19 @@ class DualTowerModel(nn.Module):
             raise ValueError("请先调用 set_entity_counts() 设置实体数量")
 
         # 创建所有靶点的索引
-        all_target_indices = torch.arange(self.num_targets, device=next(self.parameters()).device)
-        all_target_weights = torch.ones(self.num_targets, device=next(self.parameters()).device)
+        device = next(self.parameters()).device
+        all_target_indices = torch.arange(self.num_targets, device=device, dtype=torch.long)
+        all_target_weights = torch.ones(self.num_targets, device=device, dtype=torch.float)
 
-        # 获取嵌入（不应用dropout）
+        was_training = self.target_encoder.training
         self.target_encoder.eval()
         with torch.no_grad():
-            embeddings = self.target_encoder.embedding(all_target_indices.unsqueeze(0),
-                                                    all_target_weights.unsqueeze(0))
-            embeddings = embeddings.squeeze(0)  # [num_targets, embedding_dim]
-        self.target_encoder.train()
+            embeddings = self.target_encoder(
+                all_target_indices.unsqueeze(0),
+                all_target_weights.unsqueeze(0)
+            ).squeeze(0)
+        if was_training:
+            self.target_encoder.train()
 
         return embeddings
 
