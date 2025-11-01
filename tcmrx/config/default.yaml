@@ -19,6 +19,14 @@ model:
   temperature: 0.1
   dropout_rate: 0.1
   aggregator_type: "attention"  # weighted_sum, attention
+  tower_head:
+    enabled: false
+    share: true
+    hidden_dims: [512]
+    activation: "gelu"
+    dropout: 0.1
+    layer_norm: true
+    residual: true
 
 # 过滤和截断参数（可选，null表示不启用）
 filtering:

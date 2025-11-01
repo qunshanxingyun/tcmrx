@@ -23,3 +23,7 @@
 - 端到端烟雾测试：执行一轮 `python scripts/run_train.py --config <cfg>` 并确认评估指标不再全部接近 0。
 
 如需进一步扩展功能（例如加入新的聚合器或对比损失），建议在上述改动基础上编写针对性的单元测试，以避免评估或掩码逻辑再次回退。
+
+## 6. 性能诊断与塔顶扩展
+- `config/default.yaml` 新增 `model.tower_head` 配置，可在聚合后堆叠 MLP + 残差投影，以增强疾病/方剂表示能力。默认关闭，开启后建议同步更新回归测试覆盖投影头路径。
+- `scripts/analyze_dataset.py` 复用训练前处理逻辑输出靶点分布、链接多重度与正样本靶点重叠度，推荐在调参前先运行 `python -m scripts.analyze_dataset --output data/analysis.json` 获取定量诊断。该脚本的结构便于后续添加新的统计项或导出硬负样本候选列表。

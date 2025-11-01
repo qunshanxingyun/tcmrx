@@ -5,13 +5,62 @@ TCM-RX 双塔模型模块
 
 import torch
 import torch.nn as nn
-from typing import Dict, Optional, Tuple
+import torch.nn.functional as F
+from typing import Dict, Optional, Tuple, List
 import logging
 
 from .encoders import DiseaseEncoder, FormulaEncoder
 from .aggregators import AggregatorFactory
 
 logger = logging.getLogger(__name__)
+
+
+ACTIVATIONS = {
+    'relu': nn.ReLU,
+    'gelu': nn.GELU,
+    'silu': nn.SiLU,
+    'tanh': nn.Tanh,
+}
+
+
+class TowerProjection(nn.Module):
+    """可选的塔顶 MLP 投影头."""
+
+    def __init__(self,
+                 embedding_dim: int,
+                 hidden_dims: Optional[List[int]] = None,
+                 activation: str = 'gelu',
+                 dropout: float = 0.1,
+                 layer_norm: bool = True,
+                 residual: bool = True):
+        super().__init__()
+
+        hidden_dims = hidden_dims or []
+        if activation not in ACTIVATIONS:
+            raise ValueError(f"未知激活函数: {activation}")
+
+        layers: List[nn.Module] = []
+        in_dim = embedding_dim
+        act_layer = ACTIVATIONS[activation]
+
+        for hidden_dim in hidden_dims:
+            layers.append(nn.Linear(in_dim, hidden_dim))
+            if layer_norm:
+                layers.append(nn.LayerNorm(hidden_dim))
+            layers.append(act_layer())
+            if dropout > 0:
+                layers.append(nn.Dropout(dropout))
+            in_dim = hidden_dim
+
+        layers.append(nn.Linear(in_dim, embedding_dim))
+        self.projection = nn.Sequential(*layers)
+        self.use_residual = residual
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        projected = self.projection(inputs)
+        if self.use_residual and projected.shape == inputs.shape:
+            projected = projected + inputs
+        return projected
 
 
 class DualTowerModel(nn.Module):
@@ -39,6 +88,29 @@ class DualTowerModel(nn.Module):
         self.num_diseases = 0
         self.num_formulas = 0
         self.num_targets = 0
+
+        tower_head_config = config.get('tower_head') or {}
+        enabled = tower_head_config.get('enabled', False)
+        if enabled:
+            shared = tower_head_config.get('share', True)
+            head_kwargs = {
+                'embedding_dim': self.embedding_dim,
+                'hidden_dims': tower_head_config.get('hidden_dims'),
+                'activation': tower_head_config.get('activation', 'gelu'),
+                'dropout': tower_head_config.get('dropout', 0.1),
+                'layer_norm': tower_head_config.get('layer_norm', True),
+                'residual': tower_head_config.get('residual', True),
+            }
+            head_module = TowerProjection(**head_kwargs)
+            if shared:
+                self.disease_head = head_module
+                self.formula_head = head_module
+            else:
+                self.disease_head = TowerProjection(**head_kwargs)
+                self.formula_head = TowerProjection(**head_kwargs)
+        else:
+            self.disease_head = nn.Identity()
+            self.formula_head = nn.Identity()
 
         # 创建聚合器
         disease_aggregator = AggregatorFactory.create_aggregator(
@@ -114,6 +186,8 @@ class DualTowerModel(nn.Module):
             batch['disease_target_weights'],
             batch['disease_mask']
         )  # [batch_size, embedding_dim]
+        disease_embeddings = self.disease_head(disease_embeddings)
+        disease_embeddings = F.normalize(disease_embeddings, p=2, dim=1)
 
         # 编码方剂侧
         formula_embeddings = self.formula_encoder(
@@ -121,6 +195,8 @@ class DualTowerModel(nn.Module):
             batch['formula_target_weights'],
             batch['formula_mask']
         )  # [batch_size, embedding_dim]
+        formula_embeddings = self.formula_head(formula_embeddings)
+        formula_embeddings = F.normalize(formula_embeddings, p=2, dim=1)
 
         # 计算相似度矩阵
         similarities = self.compute_similarity_matrix(disease_embeddings, formula_embeddings)
