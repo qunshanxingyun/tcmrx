@@ -17,12 +17,25 @@
 - 在验证集上做网格搜索，组合不同激活函数（`gelu`、`silu`）和 dropout。
 
 ### 2. 数据分布洞察
+`scripts/analyze_dataset.py` 复用了训练前处理逻辑，输出靶点数量分布、靶点流行度、疾病/方剂多重配对情况以及正样本靶点重叠度，为定量诊断提供依据。【F:tcmrx/scripts/analyze_dataset.py†L1-L244】
 `scripts/analyze_dataset.py` 复用了训练前处理逻辑，输出靶点数量分布、靶点流行度、疾病/方剂多重配对情况以及正样本靶点重叠度，为定量诊断提供依据。【F:scripts/analyze_dataset.py†L1-L244】
 
 建议流程：
 1. 运行 `python -m scripts.analyze_dataset --output data/analysis.json`；
 2. 检查 `target_frequency`：若前 10 个靶点覆盖度过高（>40%），考虑提高 `filtering.topk_*` 或使用逆频权重；
 3. 根据 `pair_overlap` 的 coverage 分布，挑选覆盖度极低的疾病，分析是否缺乏正样本或缺失靶点。
+
+### 3. 自适应靶点筛选
+- 默认配置的 `filtering.disease_target_trimming` / `filtering.formula_target_trimming` 会依据权重累积质量与最大保留数协同裁剪靶点集合，使多数疾病不再卡在硬性上限 1000 / 3000。可通过 `mass_threshold` 调节保留的权重比例，或通过 `weight_floor` 排除极小权重靶点。【F:tcmrx/config/default.yaml†L28-L60】【F:tcmrx/dataio/filters.py†L70-L160】
+- `filtering.frequency_reweighting` 默认启用 IDF 型重加权，缓和超高频靶点造成的偏置。调大 `power` 会进一步压低热门靶点的贡献。【F:tcmrx/config/default.yaml†L62-L82】【F:tcmrx/dataio/filters.py†L162-L230】
+
+推荐先结合 `analyze_dataset` 的 `target_frequency` 输出确定靶点长尾程度，再在 `mass_threshold` / `power` 范围内做网格搜索：
+
+```
+python -m tcmrx.scripts.hparam_search --grid configs/hparam_grid.yaml --extra-args --epochs 20
+```
+
+其中 `hparam_search` 会顺序调用 `run_train.py`，生成的临时配置保存在 `hparam_runs/` 下，便于对比不同参数带来的评估指标差异。【F:tcmrx/scripts/hparam_search.py†L1-L143】
 
 ### 3. 硬负样本采样（后续）
 结合分析结果，为每个疾病构造与其靶点集合高度重合但未被标记为正样本的方剂，作为显式硬负样本加入损失；可通过扩展 `TrainingLoop` 在每个 batch 内追加来自分析脚本输出的“难例候选”。

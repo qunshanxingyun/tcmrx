@@ -26,4 +26,14 @@
 
 ## 6. 性能诊断与塔顶扩展
 - `config/default.yaml` 新增 `model.tower_head` 配置，可在聚合后堆叠 MLP + 残差投影，以增强疾病/方剂表示能力。默认关闭，开启后建议同步更新回归测试覆盖投影头路径。
+- `scripts/analyze_dataset.py` 复用训练前处理逻辑输出靶点分布、链接多重度与正样本靶点重叠度，推荐在调参前先运行 `python -m tcmrx.scripts.analyze_dataset --output data/analysis.json` 获取定量诊断。该脚本的结构便于后续添加新的统计项或导出硬负样本候选列表。
+
+## 7. 自适应靶点筛选与频率调节
+- `filtering.disease_target_trimming` / `filtering.formula_target_trimming` 提供 `max_items`、`mass_threshold`、`min_items` 等选项，可按靶点权重累积质量自动截断集合，避免所有实体都被硬性裁到固定上限。
+- `filtering.frequency_reweighting` 分别为疾病侧与方剂侧引入 IDF 类似的频率调节，默认将高频靶点下调、低频靶点上调，缓解“热门靶点统治表示”的问题。
+- 新增 `tcmrx.tests.test_target_processing` 回归用例，验证裁剪逻辑对最低保留数量、逆频削弱等行为的正确性。
+
+## 8. 网格搜索工具
+- `python -m tcmrx.scripts.hparam_search` 会针对常见的截断/频率参数建立网格，并顺序调用 `run_train.py`。可通过 `--grid` 指定 YAML 文件自定义网格，或使用 `--dry-run` 查看组合列表后再执行。
+- 建议配合 `scripts/analyze_dataset.py` 的诊断结果筛选参数范围，并在搜索结果中保留指标日志以便对比。
 - `scripts/analyze_dataset.py` 复用训练前处理逻辑输出靶点分布、链接多重度与正样本靶点重叠度，推荐在调参前先运行 `python -m scripts.analyze_dataset --output data/analysis.json` 获取定量诊断。该脚本的结构便于后续添加新的统计项或导出硬负样本候选列表。
