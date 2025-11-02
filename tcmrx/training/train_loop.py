@@ -9,7 +9,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 import time
 import logging
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 from tqdm import tqdm
 
 from core.losses import compute_contrastive_metrics
@@ -74,25 +74,42 @@ class TrainingLoop:
         # 进度条
         pbar = tqdm(self.train_loader, desc=f"Epoch {self.current_epoch + 1} Training")
 
+        loss_fn = nn.CrossEntropyLoss()
+
         for batch_idx, batch in enumerate(pbar):
             # 移动数据到设备
             batch = {k: v.to(self.device) for k, v in batch.items()}
 
-            # 前向传播
-            if self.mixed_precision:
-                loss, metrics = self._forward_mixed_precision(batch)
-            else:
-                loss, metrics = self._forward_standard(batch)
-
-            # 反向传播
             self.optimizer.zero_grad()
-            loss.backward()
 
-            # 梯度裁剪（可选）
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+            if self.mixed_precision:
+                with torch.cuda.amp.autocast():
+                    outputs = self.model(batch)
+                    similarities = outputs['scaled_similarities']
+                    labels = torch.arange(len(similarities), device=similarities.device)
+                    loss = loss_fn(similarities, labels)
 
-            # 优化器步进
-            self.optimizer.step()
+                self.scaler.scale(loss).backward()
+                self.scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
+                outputs = self.model(batch)
+                similarities = outputs['scaled_similarities']
+                labels = torch.arange(len(similarities), device=similarities.device)
+                loss = loss_fn(similarities, labels)
+
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                self.optimizer.step()
+
+            with torch.no_grad():
+                metrics = compute_contrastive_metrics(
+                    outputs['disease_embeddings'],
+                    outputs['formula_embeddings'],
+                    temperature=self.model.get_temperature()
+                )
 
             # 累计损失
             epoch_loss += loss.item()
@@ -119,53 +136,6 @@ class TrainingLoop:
             self.scheduler.step()
 
         return {'loss': avg_loss}
-
-    def _forward_standard(self, batch: Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, Dict[str, float]]:
-        """标准精度前向传播"""
-        # 前向传播
-        outputs = self.model(batch)
-        similarities = outputs['scaled_similarities']
-
-        # 计算损失
-        labels = torch.arange(len(similarities), device=similarities.device)
-        loss_fn = nn.CrossEntropyLoss()
-        loss = loss_fn(similarities, labels)
-
-        # 计算指标
-        metrics = compute_contrastive_metrics(
-            outputs['disease_embeddings'],
-            outputs['formula_embeddings'],
-            temperature=self.model.get_temperature()
-        )
-
-        return loss, metrics
-
-    def _forward_mixed_precision(self, batch: Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, Dict[str, float]]:
-        """混合精度前向传播"""
-        from core.losses import InfoNCELoss
-
-        loss_fn = InfoNCELoss(temperature=self.model.get_temperature())
-
-        with torch.cuda.amp.autocast():
-            outputs = self.model(batch)
-            loss = loss_fn(outputs['disease_embeddings'], outputs['formula_embeddings'])
-
-        # 缩放损失并反向传播
-        self.scaler.scale(loss).backward()
-
-        # 更新参数
-        self.scaler.step(self.optimizer)
-        self.scaler.update()
-
-        # 计算指标（不使用混合精度）
-        with torch.no_grad():
-            metrics = compute_contrastive_metrics(
-                outputs['disease_embeddings'],
-                outputs['formula_embeddings'],
-                temperature=self.model.get_temperature()
-            )
-
-        return loss, metrics
 
     def validate_epoch(self) -> Dict[str, float]:
         """

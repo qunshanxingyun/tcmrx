@@ -6,7 +6,7 @@ TCM-RX 评估器模块
 import torch
 import numpy as np
 from torch.utils.data import DataLoader
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional
 import logging
 from tqdm import tqdm
 
@@ -58,6 +58,7 @@ class ModelEvaluator:
         all_formula_embeddings = []
         all_disease_indices = []
         all_formula_indices = []
+        positive_pairs: Dict[int, set] = {}
 
         start_time = time.time()
 
@@ -71,37 +72,71 @@ class ModelEvaluator:
                 outputs = self.model(batch)
 
                 # 收集嵌入
+                disease_batch_indices = batch['disease_indices'].cpu()
+                formula_batch_indices = batch['formula_indices'].cpu()
+
                 all_disease_embeddings.append(outputs['disease_embeddings'].cpu())
                 all_formula_embeddings.append(outputs['formula_embeddings'].cpu())
-                all_disease_indices.append(batch['disease_indices'].cpu())
-                all_formula_indices.append(batch['formula_indices'].cpu())
+                all_disease_indices.append(disease_batch_indices)
+                all_formula_indices.append(formula_batch_indices)
 
-        # 合并所有嵌入
+                for disease_idx, formula_idx in zip(disease_batch_indices.tolist(),
+                                                   formula_batch_indices.tolist()):
+                    if disease_idx not in positive_pairs:
+                        positive_pairs[disease_idx] = set()
+                    positive_pairs[disease_idx].add(formula_idx)
+
+        # 合并并聚合所有嵌入
         disease_embeddings = torch.cat(all_disease_embeddings, dim=0)
         formula_embeddings = torch.cat(all_formula_embeddings, dim=0)
         disease_indices = torch.cat(all_disease_indices, dim=0)
         formula_indices = torch.cat(all_formula_indices, dim=0)
 
-        # 计算相似度矩阵
-        similarities = create_similarity_matrix(
-            disease_embeddings, formula_embeddings, self.model.num_formulas
+        aggregated = self._aggregate_embeddings(
+            disease_embeddings,
+            disease_indices,
+            formula_embeddings,
+            formula_indices
         )
 
-        # 创建真实标签矩阵（基于批内配对）
-        true_pairs = self._create_true_pairs_matrix(disease_indices, formula_indices)
+        disease_matrix = aggregated['disease_embeddings']
+        formula_matrix = aggregated['formula_embeddings']
+        eval_disease_indices = aggregated['disease_indices']
+        eval_formula_indices = aggregated['formula_indices']
+
+        similarities = create_similarity_matrix(
+            disease_matrix,
+            formula_matrix,
+            formula_matrix.size(0)
+        )
+
+        true_pairs = self._create_true_pairs_matrix(
+            eval_disease_indices,
+            eval_formula_indices,
+            positive_pairs
+        )
 
         # 计算评估指标
         metrics = self.metrics_calculator.compute_all_metrics(similarities, true_pairs)
 
-        # 添加相似度统计
+        # 添加正样本相似度统计
         with torch.no_grad():
-            diag_similarities = torch.diag(similarities)
-            metrics.update({
-                'mean_diagonal_similarity': diag_similarities.mean().item(),
-                'std_diagonal_similarity': diag_similarities.std().item(),
-                'max_diagonal_similarity': diag_similarities.max().item(),
-                'min_diagonal_similarity': diag_similarities.min().item()
-            })
+            formula_lookup = {int(idx): pos for pos, idx in enumerate(eval_formula_indices.tolist())}
+            positive_scores = []
+            for row, disease_id in enumerate(eval_disease_indices.tolist()):
+                for formula_id in positive_pairs.get(int(disease_id), set()):
+                    col = formula_lookup.get(int(formula_id))
+                    if col is not None:
+                        positive_scores.append(similarities[row, col].item())
+
+            if positive_scores:
+                positive_scores_tensor = torch.tensor(positive_scores)
+                metrics.update({
+                    'mean_positive_similarity': positive_scores_tensor.mean().item(),
+                    'std_positive_similarity': positive_scores_tensor.std().item(),
+                    'max_positive_similarity': positive_scores_tensor.max().item(),
+                    'min_positive_similarity': positive_scores_tensor.min().item()
+                })
 
         eval_time = time.time() - start_time
         logger.info(f"评估完成，耗时: {format_time(eval_time)}")
@@ -117,36 +152,76 @@ class ModelEvaluator:
 
         if return_embeddings:
             return metrics, {
-                'disease_embeddings': disease_embeddings,
-                'formula_embeddings': formula_embeddings,
+                'disease_embeddings': disease_matrix,
+                'formula_embeddings': formula_matrix,
                 'similarities': similarities,
-                'disease_indices': disease_indices,
-                'formula_indices': formula_indices
+                'disease_indices': eval_disease_indices,
+                'formula_indices': eval_formula_indices
             }
         else:
             return metrics
 
+    def _aggregate_embeddings(self,
+                               disease_embeddings: torch.Tensor,
+                               disease_indices: torch.Tensor,
+                               formula_embeddings: torch.Tensor,
+                               formula_indices: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """将重复的疾病/方剂样本聚合为唯一索引的表示"""
+
+        embedding_dim = disease_embeddings.size(1)
+        device = disease_embeddings.device
+        dtype = disease_embeddings.dtype
+
+        disease_bank = torch.zeros(self.model.num_diseases, embedding_dim, device=device, dtype=dtype)
+        disease_counts = torch.zeros(self.model.num_diseases, 1, device=device, dtype=dtype)
+        disease_bank.index_add_(0, disease_indices, disease_embeddings)
+        disease_counts.index_add_(0, disease_indices, torch.ones(disease_indices.size(0), 1, device=device, dtype=dtype))
+        valid_disease_mask = disease_counts.squeeze(-1) > 0
+        valid_disease_indices = valid_disease_mask.nonzero(as_tuple=False).squeeze(-1)
+        disease_bank[valid_disease_mask] = disease_bank[valid_disease_mask] / disease_counts[valid_disease_mask]
+
+        formula_bank = torch.zeros(self.model.num_formulas, embedding_dim, device=device, dtype=dtype)
+        formula_counts = torch.zeros(self.model.num_formulas, 1, device=device, dtype=dtype)
+        formula_bank.index_add_(0, formula_indices, formula_embeddings)
+        formula_counts.index_add_(0, formula_indices, torch.ones(formula_indices.size(0), 1, device=device, dtype=dtype))
+        valid_formula_mask = formula_counts.squeeze(-1) > 0
+        valid_formula_indices = valid_formula_mask.nonzero(as_tuple=False).squeeze(-1)
+        formula_bank[valid_formula_mask] = formula_bank[valid_formula_mask] / formula_counts[valid_formula_mask]
+
+        return {
+            'disease_embeddings': disease_bank[valid_disease_indices],
+            'formula_embeddings': formula_bank[valid_formula_indices],
+            'disease_indices': valid_disease_indices,
+            'formula_indices': valid_formula_indices
+        }
+
     def _create_true_pairs_matrix(self, disease_indices: torch.Tensor,
-                                formula_indices: torch.Tensor) -> torch.Tensor:
+                                formula_indices: torch.Tensor,
+                                positive_pairs: Dict[int, set]) -> torch.Tensor:
         """
         创建真实配对矩阵
 
         Args:
-            disease_indices: 疾病索引 [batch_size]
-            formula_indices: 方剂索引 [batch_size]
+            disease_indices: 唯一疾病索引 [num_diseases]
+            formula_indices: 唯一方剂索引 [num_formulas]
+            positive_pairs: 疾病→正样本方剂集合
 
         Returns:
-            真实配对矩阵 [batch_size, num_formulas]
+            真实配对矩阵 [num_diseases, num_formulas]
         """
         batch_size = len(disease_indices)
-        num_formulas = self.model.num_formulas
+        num_formulas = len(formula_indices)
 
-        # 创建零矩阵
         true_pairs = torch.zeros(batch_size, num_formulas, dtype=torch.float)
 
-        # 标记对角线位置为正样本
-        for i in range(batch_size):
-            true_pairs[i, formula_indices[i]] = 1.0
+        formula_lookup = {int(idx): pos for pos, idx in enumerate(formula_indices.tolist())}
+
+        for row, disease_id in enumerate(disease_indices.tolist()):
+            positives = positive_pairs.get(int(disease_id), set())
+            for formula_id in positives:
+                col = formula_lookup.get(int(formula_id))
+                if col is not None:
+                    true_pairs[row, col] = 1.0
 
         return true_pairs
 

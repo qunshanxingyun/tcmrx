@@ -7,9 +7,18 @@ import pandas as pd
 from typing import Dict, List, Tuple, Set
 import numpy as np
 import logging
+import math
 
 from .id_maps import IDMapper
-from .filters import apply_topk_to_set, compute_inverse_freq, apply_inverse_freq_weights, normalize_weights
+from .filters import (
+    apply_topk_to_set,
+    compute_inverse_freq,
+    apply_inverse_freq_weights,
+    normalize_weights,
+    trim_target_sets,
+    compute_frequency_weights,
+    apply_frequency_weights,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -114,10 +123,23 @@ class TCMRXDataset:
         """处理靶点集合：过滤、加权、截断"""
         logger.info("处理靶点集合...")
 
-        # 配置参数
-        topk_d = self.config.get('filtering', {}).get('topk_d')
-        topk_f = self.config.get('filtering', {}).get('topk_f')
-        inverse_freq_weight = self.config.get('filtering', {}).get('inverse_freq_weight', True)
+        filtering_cfg = self.config.get('filtering', {})
+        topk_d = filtering_cfg.get('topk_d')
+        topk_f = filtering_cfg.get('topk_f')
+        inverse_freq_weight = filtering_cfg.get('inverse_freq_weight', True)
+
+        disease_trim_cfg = self._resolve_side_config(
+            filtering_cfg.get('disease_target_trimming'),
+            'disease'
+        )
+        formula_trim_cfg = self._resolve_side_config(
+            filtering_cfg.get('formula_target_trimming'),
+            'formula'
+        )
+
+        freq_cfg = filtering_cfg.get('frequency_reweighting')
+        disease_freq_cfg = self._resolve_side_config(freq_cfg, 'disease')
+        formula_freq_cfg = self._resolve_side_config(freq_cfg, 'formula')
 
         # 处理疾病侧
         disease_targets_processed = self.disease_targets.copy()
@@ -129,8 +151,20 @@ class TCMRXDataset:
             disease_targets_processed = apply_inverse_freq_weights(
                 disease_targets_processed, inverse_freq_weights)
 
-        # Top-K截断
-        if topk_d:
+        if disease_freq_cfg:
+            disease_targets_processed = self._apply_frequency_weighting(
+                disease_targets_processed,
+                disease_freq_cfg,
+                '疾病侧',
+            )
+
+        if disease_trim_cfg:
+            disease_targets_processed = self._apply_trimming(
+                disease_targets_processed,
+                disease_trim_cfg,
+                '疾病侧',
+            )
+        elif topk_d:
             disease_targets_processed = apply_topk_to_set(
                 disease_targets_processed, topk_d, sort_by='weight')
 
@@ -142,8 +176,20 @@ class TCMRXDataset:
         # 处理方剂侧
         formula_targets_processed = self.formula_targets.copy()
 
-        # Top-K截断
-        if topk_f:
+        if formula_freq_cfg:
+            formula_targets_processed = self._apply_frequency_weighting(
+                formula_targets_processed,
+                formula_freq_cfg,
+                '方剂侧',
+            )
+
+        if formula_trim_cfg:
+            formula_targets_processed = self._apply_trimming(
+                formula_targets_processed,
+                formula_trim_cfg,
+                '方剂侧',
+            )
+        elif topk_f:
             formula_targets_processed = apply_topk_to_set(
                 formula_targets_processed, topk_f, sort_by='weight')
 
@@ -172,6 +218,78 @@ class TCMRXDataset:
         self.training_samples = valid_pairs
         logger.info(f"有效正样本: {len(valid_pairs)} / {len(self.positive_pairs)} "
                    f"({len(valid_pairs)/len(self.positive_pairs)*100:.1f}%)")
+
+    @staticmethod
+    def _resolve_side_config(config_value, side: str):
+        if config_value is None:
+            return None
+
+        if isinstance(config_value, bool):
+            return {} if config_value else None
+
+        if not isinstance(config_value, dict):
+            return config_value
+
+        if side in config_value:
+            return config_value.get(side)
+
+        has_side_keys = any(k in config_value for k in ('disease', 'formula'))
+        if has_side_keys:
+            return None
+
+        return config_value
+
+    def _apply_frequency_weighting(self, target_sets, freq_cfg, prefix: str):
+        if not freq_cfg:
+            return target_sets
+
+        if isinstance(freq_cfg, bool):
+            if not freq_cfg:
+                return target_sets
+            freq_cfg = {}
+
+        if freq_cfg.get('enabled', True) is False:
+            logger.info("%s跳过频率重加权（配置禁用）", prefix)
+            return target_sets
+
+        freq_weights = compute_frequency_weights(
+            target_sets,
+            method=freq_cfg.get('method', 'idf'),
+            smooth=freq_cfg.get('smooth', 1.0),
+            power=freq_cfg.get('power', 1.0),
+            min_weight=freq_cfg.get('min_weight'),
+            max_weight=freq_cfg.get('max_weight'),
+            base=freq_cfg.get('base', math.e),
+        )
+
+        blend = freq_cfg.get('blend', 1.0)
+        normalize = freq_cfg.get('normalize', False)
+
+        logger.info("%s应用频率重加权: method=%s, blend=%.2f", prefix, freq_cfg.get('method', 'idf'), blend)
+        return apply_frequency_weights(target_sets, freq_weights, blend=blend, normalize=normalize)
+
+    def _apply_trimming(self, target_sets, trim_cfg, prefix: str):
+        if not trim_cfg:
+            return target_sets
+
+        if isinstance(trim_cfg, bool):
+            return target_sets if not trim_cfg else trim_target_sets(target_sets)
+
+        if trim_cfg.get('enabled', True) is False:
+            logger.info("%s跳过靶点裁剪（配置禁用）", prefix)
+            return target_sets
+
+        params = {
+            'max_items': trim_cfg.get('max_items'),
+            'min_items': trim_cfg.get('min_items', 0),
+            'mass_threshold': trim_cfg.get('mass_threshold'),
+            'weight_floor': trim_cfg.get('weight_floor'),
+            'sort_by': trim_cfg.get('sort_by', 'weight'),
+            'log_prefix': f"{prefix}",
+        }
+
+        logger.info("%s靶点裁剪: %s", prefix, {k: v for k, v in params.items() if v is not None})
+        return trim_target_sets(target_sets, **params)
 
     def get_disease_targets(self, disease_id: str) -> List[Tuple[int, float]]:
         """
