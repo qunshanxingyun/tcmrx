@@ -124,6 +124,8 @@ def main():
             prefix=f"hparam_{idx:02d}_",
             dir=output_dir,
             delete=False,
+            mode="w",
+            encoding="utf-8",
         )
         with tmp_config:
             yaml.safe_dump(config_copy, tmp_config)
