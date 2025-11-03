@@ -19,13 +19,56 @@ model:
   temperature: 0.1
   dropout_rate: 0.1
   aggregator_type: "attention"  # weighted_sum, attention
+  tower_head:
+    enabled: false
+    share: true
+    hidden_dims: [512]
+    activation: "gelu"
+    dropout: 0.1
+    layer_norm: true
+    residual: true
 
 # 过滤和截断参数（可选，null表示不启用）
 filtering:
   # Top-K截断（控制数据规模）
-  topk_d: 1000      # 疾病侧靶点数量限制
-  topk_f: 3000      # 方剂侧靶点数量限制
+  topk_d: null      # 兼容旧配置，建议使用 disease_target_trimming
+  topk_f: null      # 兼容旧配置，建议使用 formula_target_trimming
   topk_c: 15        # 每个化合物的靶点数量限制
+
+  # 自适应靶点裁剪
+  disease_target_trimming:
+    enabled: true
+    max_items: 600
+    min_items: 32
+    mass_threshold: 0.9
+    weight_floor: null
+    sort_by: "weight"
+  formula_target_trimming:
+    enabled: true
+    max_items: 1500
+    min_items: 64
+    mass_threshold: 0.9
+    weight_floor: null
+    sort_by: "weight"
+
+  # 频率调节，缓解高频靶点的支配效应
+  frequency_reweighting:
+    disease:
+      enabled: true
+      method: "idf"
+      smooth: 1.0
+      power: 1.5
+      min_weight: 0.1
+      max_weight: 10.0
+      blend: 1.0
+    formula:
+      enabled: true
+      method: "idf"
+      smooth: 1.0
+      power: 1.1
+      min_weight: 0.05
+      max_weight: 5.0
+      blend: 1.0
 
   # SD1预测过滤
   pki_threshold: 6.0    # 预测亲和力阈值

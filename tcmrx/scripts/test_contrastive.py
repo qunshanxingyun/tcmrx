@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import logging
 import torch
+import pytest
 
 # 添加项目根目录到路径
 project_root = Path(__file__).parent.parent
@@ -30,9 +31,14 @@ def test_contrastive_learning():
     setup_logging(level="INFO")
     logger.info("开始测试对比学习机制...")
 
+    data_root = project_root / "TCM-MKG-data"
+    required_table = data_root / "D4_CPM_CHP.tsv"
+    if not required_table.exists():
+        pytest.skip("缺少 TCM-MKG 数据集，跳过对比学习集成测试")
+
     # 加载配置
-    config = load_config("config/default.yaml")
-    paths_config = load_config("config/paths.yaml")
+    config = load_config(str(project_root / "config" / "default.yaml"))
+    paths_config = load_config(str(project_root / "config" / "paths.yaml"))
 
     # 设置随机种子
     set_random_seed(config['training']['seed'])

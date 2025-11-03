@@ -112,25 +112,28 @@ def collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
     formula_target_indices = torch.zeros(batch_size, max_formula_targets, dtype=torch.long)
     formula_target_weights = torch.zeros(batch_size, max_formula_targets, dtype=torch.float)
 
+    disease_mask = torch.zeros(batch_size, max_disease_targets, dtype=torch.float)
+    formula_mask = torch.zeros(batch_size, max_formula_targets, dtype=torch.float)
+
     # 填充数据
     for i in range(batch_size):
         # 疾病侧
         disease_targets = disease_target_lists[i]
         disease_weights = disease_weight_lists[i]
         if disease_targets:
-            disease_target_indices[i, :len(disease_targets)] = torch.tensor(disease_targets)
-            disease_target_weights[i, :len(disease_weights)] = torch.tensor(disease_weights)
+            valid_len = len(disease_targets)
+            disease_target_indices[i, :valid_len] = torch.tensor(disease_targets)
+            disease_target_weights[i, :valid_len] = torch.tensor(disease_weights)
+            disease_mask[i, :valid_len] = 1.0
 
         # 方剂侧
         formula_targets = formula_target_lists[i]
         formula_weights = formula_weight_lists[i]
         if formula_targets:
-            formula_target_indices[i, :len(formula_targets)] = torch.tensor(formula_targets)
-            formula_target_weights[i, :len(formula_weights)] = torch.tensor(formula_weights)
-
-    # 创建掩码（标记哪些位置是有效的）
-    disease_mask = (disease_target_indices > 0).float()
-    formula_mask = (formula_target_indices > 0).float()
+            valid_len = len(formula_targets)
+            formula_target_indices[i, :valid_len] = torch.tensor(formula_targets)
+            formula_target_weights[i, :valid_len] = torch.tensor(formula_weights)
+            formula_mask[i, :valid_len] = 1.0
 
     return {
         'disease_indices': torch.tensor(disease_indices, dtype=torch.long),
