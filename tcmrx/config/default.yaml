@@ -19,13 +19,65 @@ model:
   temperature: 0.1
   dropout_rate: 0.1
   aggregator_type: "attention"  # weighted_sum, attention
+  tower_head:
+    enabled: false
+    share: true
+    hidden_dims: [512]
+    activation: "gelu"
+    dropout: 0.1
+    layer_norm: true
+    residual: true
 
 # 过滤和截断参数（可选，null表示不启用）
 filtering:
   # Top-K截断（控制数据规模）
-  topk_d: 1000      # 疾病侧靶点数量限制
-  topk_f: 3000      # 方剂侧靶点数量限制
+  topk_d: null      # 兼容旧配置，建议使用 disease_target_trimming
+  topk_f: null      # 兼容旧配置，建议使用 formula_target_trimming
   topk_c: 15        # 每个化合物的靶点数量限制
+
+  # 自适应靶点裁剪
+  disease_target_trimming:
+    enabled: true
+    max_items: 500
+    min_items: 32
+    mass_threshold: 0.85
+    weight_floor: null
+    sort_by: "weight"
+  formula_target_trimming:
+    enabled: true
+    max_items: 800
+    min_items: 64
+    mass_threshold: 0.85
+    weight_floor: null
+    sort_by: "weight"
+
+  common_target_penalty:
+    formula:
+      enabled: true
+      top_n: 120
+      multiplier: 0.1
+      min_frequency: 5
+    disease:
+      enabled: false
+
+  # 频率调节，缓解高频靶点的支配效应
+  frequency_reweighting:
+    disease:
+      enabled: true
+      method: "idf"
+      smooth: 1.0
+      power: 1.5
+      min_weight: 0.1
+      max_weight: 10.0
+      blend: 1.0
+    formula:
+      enabled: true
+      method: "idf"
+      smooth: 1.0
+      power: 1.3
+      min_weight: 0.05
+      max_weight: 5.0
+      blend: 1.0
 
   # SD1预测过滤
   pki_threshold: 6.0    # 预测亲和力阈值
@@ -34,6 +86,32 @@ filtering:
   # 加权参数
   dosage_temperature: 1.0   # 剂量softmax温度
   inverse_freq_weight: true  # 逆频重加权
+
+pathways:
+  enabled: true
+  prefix: "pathway:"
+  bridge:
+    max_pathways_per_target: 24
+    min_weight: 0.001
+  formula:
+    enabled: true
+    max_items: 500
+    min_weight: 0.001
+  disease:
+    enabled: true
+    blend: 0.35
+    max_items: 250
+    min_weight: 0.001
+
+sampling:
+  disease_pair_balancing:
+    enabled: true
+    apply_to: ['train']
+    high_freq_threshold: 200
+    low_freq_threshold: 20
+    max_pairs_high: 100
+    upsample_low_multiplier: 3
+    upsample_medium_multiplier: 1
 
 # 数据划分参数
 split:

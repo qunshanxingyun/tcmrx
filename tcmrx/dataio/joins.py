@@ -6,7 +6,7 @@ TCM-RX 数据连接模块
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Tuple, Set
-from collections import defaultdict
+from collections import defaultdict, Counter
 import logging
 
 logger = logging.getLogger(__name__)
@@ -103,6 +103,10 @@ def cpms_to_chp(d4_df: pd.DataFrame) -> Dict[str, List[Tuple[str, float]]]:
     return result
 
 
+def _normalize_pathway_name(name: str) -> str:
+    return name.strip().lower().replace(' ', '_') if isinstance(name, str) else ''
+
+
 def chp_to_chemicals(d9_df: pd.DataFrame, d12_df: pd.DataFrame = None) -> Dict[str, Set[str]]:
     """
     CHP到化合物映射
@@ -126,6 +130,96 @@ def chp_to_chemicals(d9_df: pd.DataFrame, d12_df: pd.DataFrame = None) -> Dict[s
     logger.info(f"CHP->Chemical映射: {len(result)}个CHP, "
                 f"平均每个CHP对应{np.mean([len(v) for v in result.values()]):.1f}个化合物")
     return result
+
+
+def chemicals_to_pathways(d12_df: pd.DataFrame) -> Dict[str, Set[str]]:
+    """Extract pathway annotations per chemical from D12."""
+
+    if d12_df is None or d12_df.empty:
+        logger.info("D12缺失或为空，跳过通路信息构建")
+        return {}
+
+    pathway_columns = [
+        col for col in d12_df.columns
+        if isinstance(col, str) and col.lower().startswith('pathway')
+    ]
+
+    if not pathway_columns:
+        logger.info("D12中未找到Pathway列，跳过通路信息构建")
+        return {}
+
+    mapping: Dict[str, Set[str]] = {}
+
+    for inchikey, group in d12_df.groupby('InChIKey'):
+        pathways: Set[str] = set()
+        for col in pathway_columns:
+            for value in group[col].dropna().unique():
+                normalized = _normalize_pathway_name(str(value))
+                if normalized:
+                    pathways.add(normalized)
+        if pathways:
+            mapping[inchikey] = pathways
+
+    logger.info("化合物->通路映射: %d 个化合物包含通路注释", len(mapping))
+    return mapping
+
+
+def build_target_to_pathways(
+    chemical_to_targets_map: Dict[str, List[Tuple[str, float]]],
+    chemical_to_pathways_map: Dict[str, Set[str]],
+    prefix: str = 'pathway:',
+    max_pathways_per_target: int = 32,
+    min_weight: float = 1e-4,
+) -> Dict[str, List[Tuple[str, float]]]:
+    """Aggregate pathway distributions for each target via shared chemicals."""
+
+    if not chemical_to_pathways_map:
+        return {}
+
+    pathway_counter: Dict[str, Counter] = defaultdict(Counter)
+
+    for chemical, target_list in chemical_to_targets_map.items():
+        pathways = chemical_to_pathways_map.get(chemical)
+        if not pathways:
+            continue
+
+        for target_id, affinity in target_list:
+            try:
+                affinity_float = max(float(affinity), 0.0)
+            except (TypeError, ValueError):
+                affinity_float = 0.0
+
+            if affinity_float <= 0:
+                continue
+
+            for pathway in pathways:
+                pathway_id = f"{prefix}{pathway}"
+                pathway_counter[target_id][pathway_id] += affinity_float
+
+    target_to_pathways: Dict[str, List[Tuple[str, float]]] = {}
+
+    for target_id, counter in pathway_counter.items():
+        if not counter:
+            continue
+        total = sum(counter.values())
+        if total <= 0:
+            continue
+        normalized = [
+            (pathway_id, weight / total)
+            for pathway_id, weight in counter.most_common(max_pathways_per_target)
+            if weight / total >= min_weight
+        ]
+        if normalized:
+            target_to_pathways[target_id] = normalized
+
+    if target_to_pathways:
+        logger.info(
+            "目标->通路映射: %d 个靶点具备通路投影 (max=%d)",
+            len(target_to_pathways),
+            max(len(v) for v in target_to_pathways.values()),
+        )
+
+    return target_to_pathways
 
 
 def chemicals_to_targets(sd1_df: pd.DataFrame, experimental_df: pd.DataFrame = None) -> Dict[str, List[Tuple[str, float]]]:
@@ -163,9 +257,14 @@ def chemicals_to_targets(sd1_df: pd.DataFrame, experimental_df: pd.DataFrame = N
     return result
 
 
-def formulas_to_targets(cpms_to_chp_map: Dict[str, List[Tuple[str, float]]],
-                        chp_to_chemicals_map: Dict[str, Set[str]],
-                        chemical_to_targets_map: Dict[str, List[Tuple[str, float]]]) -> Dict[str, List[Tuple[str, float]]]:
+def formulas_to_targets(
+    cpms_to_chp_map: Dict[str, List[Tuple[str, float]]],
+    chp_to_chemicals_map: Dict[str, Set[str]],
+    chemical_to_targets_map: Dict[str, List[Tuple[str, float]]],
+    *,
+    chemical_to_pathways_map: Dict[str, Set[str]] = None,
+    pathway_config: Dict = None,
+) -> Dict[str, List[Tuple[str, float]]]:
     """
     CPM→CHP→Chemical→Target聚合得到方剂靶点集合
 
@@ -178,9 +277,18 @@ def formulas_to_targets(cpms_to_chp_map: Dict[str, List[Tuple[str, float]]],
         {CPM_ID: [(EntrezID, weight), ...]}
     """
     result = {}
+    pathway_enabled = False
+    formula_pathway_cfg = {}
+
+    if pathway_config:
+        pathway_enabled = pathway_config.get('enabled', True)
+        formula_pathway_cfg = pathway_config.get('formula', {}) if pathway_enabled else {}
+
+    prefix = (pathway_config or {}).get('prefix', 'pathway:')
 
     for cpm_id, chp_list in cpms_to_chp_map.items():
-        all_targets = []
+        target_weights: Dict[str, float] = defaultdict(float)
+        pathway_scores: Counter = Counter()
 
         for chp_id, dosage_ratio in chp_list:
             # 安全检查：确保dosage_ratio是单个数值
@@ -198,27 +306,59 @@ def formulas_to_targets(cpms_to_chp_map: Dict[str, List[Tuple[str, float]]],
                 targets = chemical_to_targets_map.get(chemical, [])
 
                 # 传播剂量权重
-                for target_id, affinity in targets:
-                    # 安全检查：确保affinity也是数值
+                chem_targets = targets
+                for target_id, affinity in chem_targets:
                     try:
                         affinity_float = float(affinity)
                     except (TypeError, ValueError):
-                        logger.warning(f"无效的亲和力值 {affinity} (Chemical: {chemical}, Target: {target_id})，使用默认值1.0")
+                        logger.warning(
+                            f"无效的亲和力值 {affinity} (Chemical: {chemical}, Target: {target_id})，使用默认值1.0"
+                        )
                         affinity_float = 1.0
 
-                    # 综合权重 = 剂量比例 * 亲和力
                     weight = dosage_float * affinity_float
-                    all_targets.append((target_id, weight))
+                    target_weights[target_id] += weight
 
-        if all_targets:
-            result[cpm_id] = all_targets
+                if pathway_enabled and formula_pathway_cfg.get('enabled', True):
+                    pathways = chemical_to_pathways_map.get(chemical) if chemical_to_pathways_map else None
+                    if pathways:
+                        chem_strength = max(
+                            (max(float(a), 0.0) for _, a in chem_targets if a is not None),
+                            default=1.0,
+                        )
+                        pathway_weight = dosage_float * chem_strength
+                        for pathway in pathways:
+                            normalized = _normalize_pathway_name(pathway)
+                            if normalized:
+                                pathway_scores[f"{prefix}{normalized}"] += pathway_weight
+
+        aggregated_targets = sorted(target_weights.items(), key=lambda x: x[1], reverse=True)
+
+        if aggregated_targets:
+            result[cpm_id] = aggregated_targets
+
+        if pathway_scores:
+            max_items = formula_pathway_cfg.get('max_items', 500)
+            min_weight = formula_pathway_cfg.get('min_weight', 1e-4)
+            sorted_pathways = [
+                (pathway_id, weight)
+                for pathway_id, weight in pathway_scores.most_common(max_items)
+                if weight >= min_weight
+            ]
+            if sorted_pathways:
+                result.setdefault(cpm_id, [])
+                result[cpm_id].extend(sorted_pathways)
 
     logger.info(f"方剂->Target聚合: {len(result)}个方剂有靶点信息, "
                 f"平均每个方剂{np.mean([len(v) for v in result.values()]):.1f}个靶点")
     return result
 
 
-def diseases_to_targets(icd11_to_targets_map: Dict[str, Set[str]]) -> Dict[str, List[Tuple[str, float]]]:
+def diseases_to_targets(
+    icd11_to_targets_map: Dict[str, Set[str]],
+    target_to_pathways_map: Dict[str, List[Tuple[str, float]]] = None,
+    pathway_config: Dict = None,
+) -> Dict[str, List[Tuple[str, float]]]:
     """
     疾病到靶点映射（统一权重为1.0）
 
@@ -229,8 +369,47 @@ def diseases_to_targets(icd11_to_targets_map: Dict[str, Set[str]]) -> Dict[str, 
         {ICD11_code: [(EntrezID, 1.0), ...]}
     """
     result = {}
+
+    pathway_enabled = False
+    disease_cfg = {}
+    if pathway_config:
+        pathway_enabled = pathway_config.get('enabled', True)
+        disease_cfg = pathway_config.get('disease', {}) if pathway_enabled else {}
+
+    prefix = (pathway_config or {}).get('prefix', 'pathway:')
+    blend = disease_cfg.get('blend', 0.3)
+    max_items = disease_cfg.get('max_items', 300)
+    min_weight = disease_cfg.get('min_weight', 1e-4)
+
     for icd11_code, targets in icd11_to_targets_map.items():
-        result[icd11_code] = [(target_id, 1.0) for target_id in targets]
+        base_targets = [(target_id, 1.0) for target_id in targets]
+
+        if (
+            pathway_enabled
+            and disease_cfg.get('enabled', True)
+            and target_to_pathways_map
+            and blend > 0
+        ):
+            pathway_scores: Counter = Counter()
+            for target_id, weight in base_targets:
+                pathway_list = target_to_pathways_map.get(target_id, [])
+                for pathway_id, pathway_weight in pathway_list:
+                    if not pathway_id.startswith(prefix):
+                        pathway_id = f"{prefix}{_normalize_pathway_name(pathway_id)}"
+                    contribution = blend * weight * pathway_weight
+                    if contribution > 0:
+                        pathway_scores[pathway_id] += contribution
+
+            if pathway_scores:
+                sorted_scores = [
+                    (pathway_id, score)
+                    for pathway_id, score in pathway_scores.most_common(max_items)
+                    if score >= min_weight
+                ]
+                if sorted_scores:
+                    base_targets = base_targets + sorted_scores
+
+        result[icd11_code] = base_targets
 
     logger.info(f"疾病->Target映射: {len(result)}个疾病有靶点信息")
     return result
