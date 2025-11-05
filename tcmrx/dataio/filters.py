@@ -109,64 +109,274 @@ def apply_topk_to_set(target_sets: Dict[str, List[Tuple[str, float]]],
             sorted_targets = targets.copy()
             np.random.shuffle(sorted_targets)
 
-        result[entity] = sorted_targets[:top_k]
-        total_after += len(sorted_targets)
+        trimmed = sorted_targets[:top_k]
+        result[entity] = trimmed
+        total_after += len(trimmed)
 
     logger.info(f"集合Top-{top_k}: {total_before} -> {total_after} "
-                f"({total_after/total_before*100:.1f}% 保留)")
+                f"({(total_after/total_before*100) if total_before else 0:.1f}% 保留)")
+    return result
+
+
+def _maybe_shuffle(targets: List[Tuple[str, float]], sort_by: str) -> List[Tuple[str, float]]:
+    if sort_by == 'weight':
+        return sorted(targets, key=lambda x: x[1], reverse=True)
+
+    shuffled = targets.copy()
+    np.random.shuffle(shuffled)
+    return shuffled
+
+
+def trim_target_sets(
+    target_sets: Dict[str, List[Tuple[str, float]]],
+    max_items: Optional[int] = None,
+    min_items: int = 0,
+    mass_threshold: Optional[float] = None,
+    weight_floor: Optional[float] = None,
+    sort_by: str = 'weight',
+    log_prefix: str = 'trim'
+) -> Dict[str, List[Tuple[str, float]]]:
+    """根据多种条件裁剪实体的靶点集合。
+
+    该方法支持以下裁剪策略：
+
+    * ``max_items``：上限保留的靶点数量；
+    * ``min_items``：保证至少保留的数量；
+    * ``mass_threshold``：按照权重降序累积达到指定质量阈值后停止；
+    * ``weight_floor``：过滤掉权重低于阈值的靶点；
+    * ``sort_by``：控制裁剪前的排序方式（``weight`` / ``random``）。
+
+    参数之间按 ``weight_floor`` -> ``mass_threshold`` -> ``max_items`` 顺序依次应用，
+    并确保最终结果不少于 ``min_items``。
+    """
+
+    if not any([max_items, min_items, mass_threshold, weight_floor]) and sort_by == 'weight':
+        logger.info("跳过靶点裁剪（未启用任何约束）")
+        return target_sets
+
+    result: Dict[str, List[Tuple[str, float]]] = {}
+    total_before = 0
+    total_after = 0
+
+    for entity, targets in target_sets.items():
+        total_before += len(targets)
+
+        if not targets:
+            result[entity] = targets
+            continue
+
+        ordered = _maybe_shuffle(targets, sort_by)
+
+        if weight_floor is not None:
+            filtered = [pair for pair in ordered if pair[1] >= weight_floor]
+            if min_items and len(filtered) < min_items:
+                filtered = ordered[:min_items]
+        else:
+            filtered = ordered
+
+        if mass_threshold is not None and filtered:
+            total_weight = sum(max(weight, 0.0) for _, weight in filtered)
+            if total_weight > 0:
+                cumulative = 0.0
+                mass_cut = []
+                for idx, (target_id, weight) in enumerate(filtered):
+                    mass_cut.append((target_id, weight))
+                    cumulative += max(weight, 0.0)
+                    if idx + 1 < min_items:
+                        continue
+                    if cumulative / total_weight >= mass_threshold:
+                        break
+                filtered = mass_cut
+
+        if max_items is not None and len(filtered) > max_items:
+            filtered = filtered[:max_items]
+
+        if min_items and len(filtered) < min_items:
+            filtered = ordered[:min(min_items, len(ordered))]
+
+        result[entity] = filtered
+        total_after += len(filtered)
+
+    logger.info(
+        f"{log_prefix}裁剪: {total_before} -> {total_after} "
+        f"({(total_after/total_before*100) if total_before else 0:.1f}% 保留)"
+    )
     return result
 
 
 def compute_inverse_freq(target_sets: Dict[str, List[Tuple[str, float]]]) -> Dict[str, float]:
     """
-    计算靶点逆频权重
-
-    Args:
-        target_sets: {entity: [(target_id, weight), ...]}
-
-    Returns:
-        {target_id: inverse_frequency_weight}
+    保留旧接口，调用 :func:`compute_frequency_weights` 获取 ``1/log`` 逆频权重。
     """
-    # 统计每个靶点出现的频率
+
+    return compute_frequency_weights(
+        target_sets,
+        method='log_reciprocal',
+        smooth=1.0,
+        power=1.0,
+    )
+
+
+def compute_frequency_weights(
+    target_sets: Dict[str, List[Tuple[str, float]]],
+    method: str = 'idf',
+    smooth: float = 1.0,
+    power: float = 1.0,
+    min_weight: Optional[float] = None,
+    max_weight: Optional[float] = None,
+    base: float = math.e,
+) -> Dict[str, float]:
+    """计算基于频率的重加权系数。
+
+    Parameters
+    ----------
+    method
+        ``'idf'`` -> ``((N + smooth) / (freq + smooth)) ** power``;
+        ``'log_idf'`` -> ``log((N + smooth)/(freq + smooth), base) ** power``;
+        ``'log_reciprocal'`` -> ``1 / log(freq + smooth) ** power``；
+        ``'reciprocal'`` -> ``1 / (freq + smooth) ** power``。
+    smooth
+        防止除零/取对数时出现极端值。
+    power
+        控制放大程度。
+    min_weight/max_weight
+        对结果进行裁剪以避免极端比率。
+    base
+        ``log_idf`` 模式下使用的对数底。
+    """
+
+    if not target_sets:
+        return {}
+
     target_counter = Counter()
     for targets in target_sets.values():
         for target_id, _ in targets:
             target_counter[target_id] += 1
 
-    # 计算逆频权重: w = 1 / log(1 + freq)
-    inverse_freq_weights = {}
-    for target_id, freq in target_counter.items():
-        inverse_freq_weights[target_id] = 1.0 / math.log(1 + freq)
+    total_entities = max(len(target_sets), 1)
+    weights = {}
 
-    logger.info(f"计算了 {len(inverse_freq_weights)} 个靶点的逆频权重 "
-                f"(min: {min(inverse_freq_weights.values()):.4f}, "
-                f"max: {max(inverse_freq_weights.values()):.4f})")
-    return inverse_freq_weights
+    for target_id, freq in target_counter.items():
+        freq = max(freq, 1)
+        if method == 'idf':
+            raw = ((total_entities + smooth) / (freq + smooth)) ** power
+        elif method == 'log_idf':
+            ratio = max((total_entities + smooth) / (freq + smooth), 1.0)
+            raw = math.log(ratio, base) ** power if ratio > 1.0 else 1.0
+        elif method == 'log_reciprocal':
+            raw = 1.0 / (math.log(freq + smooth, base) ** power)
+        elif method == 'reciprocal':
+            raw = 1.0 / ((freq + smooth) ** power)
+        else:
+            raise ValueError(f"未知的频率加权方法: {method}")
+
+        if min_weight is not None:
+            raw = max(min_weight, raw)
+        if max_weight is not None:
+            raw = min(max_weight, raw)
+
+        weights[target_id] = raw
+
+    if weights:
+        logger.info(
+            "频率权重: %d 个靶点 (min=%.4f, max=%.4f)",
+            len(weights),
+            min(weights.values()),
+            max(weights.values()),
+        )
+    return weights
 
 
 def apply_inverse_freq_weights(target_sets: Dict[str, List[Tuple[str, float]]],
                             inverse_freq_weights: Dict[str, float]) -> Dict[str, List[Tuple[str, float]]]:
-    """
-    应用逆频重加权
+    """向后兼容的包装器。"""
 
-    Args:
-        target_sets: {entity: [(target_id, weight), ...]}
-        inverse_freq_weights: {target_id: weight}
+    return apply_frequency_weights(target_sets, inverse_freq_weights)
 
-    Returns:
-        重加权后的映射
-    """
-    result = {}
+
+def penalize_common_targets(
+    target_sets: Dict[str, List[Tuple[str, float]]],
+    top_n: Optional[int] = None,
+    multiplier: float = 0.1,
+    min_frequency: int = 1,
+    log_prefix: str = "频率惩罚",
+) -> Dict[str, List[Tuple[str, float]]]:
+    """Scale down the highest-frequency targets to combat representation collapse."""
+
+    if not top_n or multiplier is None:
+        logger.info("跳过高频靶点惩罚（未启用）")
+        return target_sets
+
+    counter = Counter()
+    for targets in target_sets.values():
+        for target_id, _ in targets:
+            counter[target_id] += 1
+
+    if not counter:
+        return target_sets
+
+    penalized_ids = {
+        target_id
+        for target_id, freq in counter.most_common(top_n)
+        if freq >= max(min_frequency, 1)
+    }
+
+    if not penalized_ids:
+        logger.info("%s未找到需要惩罚的靶点", log_prefix)
+        return target_sets
+
+    logger.info(
+        "%s: top-%d 靶点权重缩放系数=%.3f",
+        log_prefix,
+        len(penalized_ids),
+        multiplier,
+    )
+
+    result: Dict[str, List[Tuple[str, float]]] = {}
+    for entity, targets in target_sets.items():
+        adjusted = []
+        for target_id, weight in targets:
+            if target_id in penalized_ids:
+                adjusted.append((target_id, weight * multiplier))
+            else:
+                adjusted.append((target_id, weight))
+        result[entity] = adjusted
+
+    return result
+
+
+def apply_frequency_weights(
+    target_sets: Dict[str, List[Tuple[str, float]]],
+    freq_weights: Dict[str, float],
+    blend: float = 1.0,
+    normalize: bool = False,
+) -> Dict[str, List[Tuple[str, float]]]:
+    """应用频率重加权，同时支持幂次混合与可选归一化。"""
+
+    if not freq_weights:
+        logger.info("跳过频率重加权（未提供权重表）")
+        return target_sets
+
+    result: Dict[str, List[Tuple[str, float]]] = {}
+
     for entity, targets in target_sets.items():
         weighted_targets = []
         for target_id, original_weight in targets:
-            inv_freq_weight = inverse_freq_weights.get(target_id, 1.0)
-            # 最终权重 = 原始权重 * 逆频权重
-            final_weight = original_weight * inv_freq_weight
-            weighted_targets.append((target_id, final_weight))
+            freq_weight = freq_weights.get(target_id, 1.0)
+            adjusted = original_weight * (freq_weight ** blend)
+            weighted_targets.append((target_id, adjusted))
+
+        if normalize and weighted_targets:
+            weights = [w for _, w in weighted_targets]
+            total = sum(weights)
+            if total > 0:
+                weighted_targets = [
+                    (tid, w / total) for tid, w in weighted_targets
+                ]
+
         result[entity] = weighted_targets
 
-    logger.info("应用逆频重加权完成")
+    logger.info("频率重加权应用完成")
     return result
 
 
