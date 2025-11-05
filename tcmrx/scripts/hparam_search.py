@@ -119,6 +119,10 @@ def main():
         label = "_".join(f"{k.split('.')[-1]}-{v}" for k, v in override.items())
         experiment_name = f"grid_{idx:02d}_{label}"
 
+        print(f"[HP-SEARCH] combo {idx}: {override}")
+        if args.dry_run:
+            continue
+
         tmp_config = tempfile.NamedTemporaryFile(
             suffix=".yaml",
             prefix=f"hparam_{idx:02d}_",
@@ -129,22 +133,19 @@ def main():
         )
         with tmp_config:
             yaml.safe_dump(config_copy, tmp_config)
+            tmp_config_path = tmp_config.name
 
         cmd = [
             sys.executable,
             "-m",
             "tcmrx.scripts.run_train",
             "--config",
-            str(tmp_config.name),
+            str(tmp_config_path),
             "--paths",
             args.paths,
             "--experiment",
             experiment_name,
         ] + extra_args
-
-        print(f"[HP-SEARCH] combo {idx}: {override}")
-        if args.dry_run:
-            continue
 
         subprocess.run(cmd, check=True)
 

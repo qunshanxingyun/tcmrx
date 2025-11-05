@@ -85,16 +85,27 @@ def load_processed_dataset(config: Dict, paths_config: Dict) -> Tuple[TCMRXDatas
     filtering_config = config.get('filtering', {})
 
     cpms_to_chp_map = cpms_to_chp(formula_tables['D4_CPM_CHP'])
+    d12_table = formula_tables.get('D12_InChIKey')
     chp_to_chemicals_map = chp_to_chemicals(
         formula_tables['D9_CHP_InChIKey'],
-        formula_tables.get('D12_InChIKey'),
+        d12_table,
     )
+    chemical_to_pathways_map = chemicals_to_pathways(d12_table)
 
     sd1_df = prediction_tables['SD1_predicted']
     sd1_df = filter_sd1_by_pki(sd1_df, filtering_config.get('pki_threshold'))
     chemical_to_targets_map = per_chemical_topk(
         chemicals_to_targets(sd1_df),
         filtering_config.get('topk_c'),
+    )
+
+    pathway_config = config.get('pathways', {})
+    target_to_pathways_map = build_target_to_pathways(
+        chemical_to_targets_map,
+        chemical_to_pathways_map,
+        prefix=pathway_config.get('prefix', 'pathway:'),
+        max_pathways_per_target=pathway_config.get('bridge', {}).get('max_pathways_per_target', 32),
+        min_weight=pathway_config.get('bridge', {}).get('min_weight', 1e-4),
     )
 
     icd11_to_targets_map = icd11_to_targets(
@@ -108,8 +119,14 @@ def load_processed_dataset(config: Dict, paths_config: Dict) -> Tuple[TCMRXDatas
         cpms_to_chp_map,
         chp_to_chemicals_map,
         chemical_to_targets_map,
+        chemical_to_pathways_map=chemical_to_pathways_map,
+        pathway_config=pathway_config,
     )
-    disease_targets_raw = diseases_to_targets(icd11_to_targets_map)
+    disease_targets_raw = diseases_to_targets(
+        icd11_to_targets_map,
+        target_to_pathways_map=target_to_pathways_map,
+        pathway_config=pathway_config,
+    )
 
     cpms_to_icd11_map = cpms_to_icd11(formula_tables['D5_CPM_ICD11'])
     positive_pairs_raw = [
@@ -119,7 +136,7 @@ def load_processed_dataset(config: Dict, paths_config: Dict) -> Tuple[TCMRXDatas
     ]
 
     dataset = TCMRXDataset(config)
-    dataset.build_from_raw_data(disease_targets_raw, formula_targets_raw, positive_pairs_raw)
+    dataset.build_from_raw_data(disease_targets_raw, formula_targets_raw, positive_pairs_raw, split_name='analysis')
 
     disease_to_formulas: Dict[str, List[str]] = defaultdict(list)
     formula_to_diseases: Dict[str, List[str]] = defaultdict(list)

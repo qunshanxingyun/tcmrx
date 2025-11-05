@@ -294,6 +294,57 @@ def apply_inverse_freq_weights(target_sets: Dict[str, List[Tuple[str, float]]],
     return apply_frequency_weights(target_sets, inverse_freq_weights)
 
 
+def penalize_common_targets(
+    target_sets: Dict[str, List[Tuple[str, float]]],
+    top_n: Optional[int] = None,
+    multiplier: float = 0.1,
+    min_frequency: int = 1,
+    log_prefix: str = "频率惩罚",
+) -> Dict[str, List[Tuple[str, float]]]:
+    """Scale down the highest-frequency targets to combat representation collapse."""
+
+    if not top_n or multiplier is None:
+        logger.info("跳过高频靶点惩罚（未启用）")
+        return target_sets
+
+    counter = Counter()
+    for targets in target_sets.values():
+        for target_id, _ in targets:
+            counter[target_id] += 1
+
+    if not counter:
+        return target_sets
+
+    penalized_ids = {
+        target_id
+        for target_id, freq in counter.most_common(top_n)
+        if freq >= max(min_frequency, 1)
+    }
+
+    if not penalized_ids:
+        logger.info("%s未找到需要惩罚的靶点", log_prefix)
+        return target_sets
+
+    logger.info(
+        "%s: top-%d 靶点权重缩放系数=%.3f",
+        log_prefix,
+        len(penalized_ids),
+        multiplier,
+    )
+
+    result: Dict[str, List[Tuple[str, float]]] = {}
+    for entity, targets in target_sets.items():
+        adjusted = []
+        for target_id, weight in targets:
+            if target_id in penalized_ids:
+                adjusted.append((target_id, weight * multiplier))
+            else:
+                adjusted.append((target_id, weight))
+        result[entity] = adjusted
+
+    return result
+
+
 def apply_frequency_weights(
     target_sets: Dict[str, List[Tuple[str, float]]],
     freq_weights: Dict[str, float],

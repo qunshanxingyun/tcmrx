@@ -18,7 +18,6 @@
 
 ### 2. 数据分布洞察
 `scripts/analyze_dataset.py` 复用了训练前处理逻辑，输出靶点数量分布、靶点流行度、疾病/方剂多重配对情况以及正样本靶点重叠度，为定量诊断提供依据。【F:tcmrx/scripts/analyze_dataset.py†L1-L244】
-`scripts/analyze_dataset.py` 复用了训练前处理逻辑，输出靶点数量分布、靶点流行度、疾病/方剂多重配对情况以及正样本靶点重叠度，为定量诊断提供依据。【F:scripts/analyze_dataset.py†L1-L244】
 
 建议流程：
 1. 运行 `python -m scripts.analyze_dataset --output data/analysis.json`；

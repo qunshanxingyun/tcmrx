@@ -70,7 +70,9 @@ def run_sanity_check(config_path: str = "config/default.yaml",
 
         # 方剂侧连接
         cpms_to_chp_map = cpms_to_chp(formula_tables['D4_CPM_CHP'])
-        chp_to_chemicals_map = chp_to_chemicals(formula_tables['D9_CHP_InChIKey'], formula_tables.get('D12_InChIKey'))
+        d12_table = formula_tables.get('D12_InChIKey')
+        chp_to_chemicals_map = chp_to_chemicals(formula_tables['D9_CHP_InChIKey'], d12_table)
+        chemical_to_pathways_map = chemicals_to_pathways(d12_table)
 
         # 限制chemical-to-targets的数据量（避免内存溢出）
         sd1_df = prediction_tables['SD1_predicted']
@@ -84,6 +86,15 @@ def run_sanity_check(config_path: str = "config/default.yaml",
             prediction_tables.get('D13_InChIKey_EntrezID')
         )
 
+        pathway_config = config.get('pathways', {})
+        target_to_pathways_map = build_target_to_pathways(
+            chemical_to_targets_map,
+            chemical_to_pathways_map,
+            prefix=pathway_config.get('prefix', 'pathway:'),
+            max_pathways_per_target=pathway_config.get('bridge', {}).get('max_pathways_per_target', 32),
+            min_weight=pathway_config.get('bridge', {}).get('min_weight', 1e-4),
+        )
+
         # 疾病侧连接
         icd11_to_targets_map = icd11_to_targets(
             disease_tables['D19_ICD11_CUI'],
@@ -94,11 +105,21 @@ def run_sanity_check(config_path: str = "config/default.yaml",
 
         # 构建方剂靶点集合
         logger.info("构建方剂靶点集合...")
-        formula_targets_raw = formulas_to_targets(cpms_to_chp_map, chp_to_chemicals_map, chemical_to_targets_map)
+        formula_targets_raw = formulas_to_targets(
+            cpms_to_chp_map,
+            chp_to_chemicals_map,
+            chemical_to_targets_map,
+            chemical_to_pathways_map=chemical_to_pathways_map,
+            pathway_config=pathway_config,
+        )
 
         # 构建疾病靶点集合
         logger.info("构建疾病靶点集合...")
-        disease_targets_raw = diseases_to_targets(icd11_to_targets_map)
+        disease_targets_raw = diseases_to_targets(
+            icd11_to_targets_map,
+            target_to_pathways_map=target_to_pathways_map,
+            pathway_config=pathway_config,
+        )
 
         # 获取监督对
         cpms_to_icd11_map = cpms_to_icd11(formula_tables['D5_CPM_ICD11'])
@@ -136,14 +157,32 @@ def run_sanity_check(config_path: str = "config/default.yaml",
                 sd1_df,
                 prediction_tables.get('D13_InChIKey_EntrezID')
             )
-            formula_targets_raw = formulas_to_targets(cpms_to_chp_map, chp_to_chemicals_map, chemical_to_targets_map)
+            target_to_pathways_map = build_target_to_pathways(
+                chemical_to_targets_map,
+                chemical_to_pathways_map,
+                prefix=pathway_config.get('prefix', 'pathway:'),
+                max_pathways_per_target=pathway_config.get('bridge', {}).get('max_pathways_per_target', 32),
+                min_weight=pathway_config.get('bridge', {}).get('min_weight', 1e-4),
+            )
+            formula_targets_raw = formulas_to_targets(
+                cpms_to_chp_map,
+                chp_to_chemicals_map,
+                chemical_to_targets_map,
+                chemical_to_pathways_map=chemical_to_pathways_map,
+                pathway_config=pathway_config,
+            )
+            disease_targets_raw = diseases_to_targets(
+                icd11_to_targets_map,
+                target_to_pathways_map=target_to_pathways_map,
+                pathway_config=pathway_config,
+            )
 
         # 6. 构建数据集
         logger.info("6. 构建数据集...")
         logger.info(f"输入数据统计: 方剂靶点 {len(formula_targets_raw)}, 疾病靶点 {len(disease_targets_raw)}, 监督对 {len(positive_pairs_raw)}")
 
         dataset = TCMRXDataset(config)
-        dataset.build_from_raw_data(disease_targets_raw, formula_targets_raw, positive_pairs_raw)
+        dataset.build_from_raw_data(disease_targets_raw, formula_targets_raw, positive_pairs_raw, split_name='train')
 
         logger.info(f"数据集构建完成: {dataset}")
         logger.info(f"训练样本数量: {len(dataset.training_samples) if hasattr(dataset, 'training_samples') else '未知'}")

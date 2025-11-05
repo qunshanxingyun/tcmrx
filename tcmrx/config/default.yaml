@@ -38,18 +38,27 @@ filtering:
   # 自适应靶点裁剪
   disease_target_trimming:
     enabled: true
-    max_items: 600
+    max_items: 500
     min_items: 32
-    mass_threshold: 0.9
+    mass_threshold: 0.85
     weight_floor: null
     sort_by: "weight"
   formula_target_trimming:
     enabled: true
-    max_items: 1500
+    max_items: 800
     min_items: 64
-    mass_threshold: 0.9
+    mass_threshold: 0.85
     weight_floor: null
     sort_by: "weight"
+
+  common_target_penalty:
+    formula:
+      enabled: true
+      top_n: 120
+      multiplier: 0.1
+      min_frequency: 5
+    disease:
+      enabled: false
 
   # 频率调节，缓解高频靶点的支配效应
   frequency_reweighting:
@@ -65,7 +74,7 @@ filtering:
       enabled: true
       method: "idf"
       smooth: 1.0
-      power: 1.1
+      power: 1.3
       min_weight: 0.05
       max_weight: 5.0
       blend: 1.0
@@ -77,6 +86,32 @@ filtering:
   # 加权参数
   dosage_temperature: 1.0   # 剂量softmax温度
   inverse_freq_weight: true  # 逆频重加权
+
+pathways:
+  enabled: true
+  prefix: "pathway:"
+  bridge:
+    max_pathways_per_target: 24
+    min_weight: 0.001
+  formula:
+    enabled: true
+    max_items: 500
+    min_weight: 0.001
+  disease:
+    enabled: true
+    blend: 0.35
+    max_items: 250
+    min_weight: 0.001
+
+sampling:
+  disease_pair_balancing:
+    enabled: true
+    apply_to: ['train']
+    high_freq_threshold: 200
+    low_freq_threshold: 20
+    max_pairs_high: 100
+    upsample_low_multiplier: 3
+    upsample_medium_multiplier: 1
 
 # 数据划分参数
 split:

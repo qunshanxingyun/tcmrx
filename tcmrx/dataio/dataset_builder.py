@@ -3,11 +3,11 @@ TCM-RX 数据集构建模块
 组装 (Disease, Formula) 训练/验证样本
 """
 
-import pandas as pd
 from typing import Dict, List, Tuple, Set
 import numpy as np
 import logging
 import math
+from collections import defaultdict
 
 from .id_maps import IDMapper
 from .filters import (
@@ -18,6 +18,7 @@ from .filters import (
     trim_target_sets,
     compute_frequency_weights,
     apply_frequency_weights,
+    penalize_common_targets,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,17 +60,23 @@ class TCMRXDataset:
         # 原始数据
         self.disease_targets = {}  # {disease_id: [(target_id, weight), ...]}
         self.formula_targets = {}  # {formula_id: [(target_id, weight), ...]}
-        self.positive_pairs = []   # [(disease_id, formula_id), ...]
+        self.raw_positive_pairs: List[Tuple[str, str]] = []
+        self.positive_pairs: List[Tuple[str, str]] = []
 
         # 处理后的数据
         self.processed_disease_targets = {}
         self.processed_formula_targets = {}
         self.training_samples = []
 
+        seed = config.get('training', {}).get('seed', 42)
+        self.rng = np.random.default_rng(seed)
+        self.split_name = 'train'
+
     def build_from_raw_data(self,
                           disease_targets_raw: Dict[str, List[Tuple[str, float]]],
                           formula_targets_raw: Dict[str, List[Tuple[str, float]]],
-                          positive_pairs_raw: List[Tuple[str, str]]) -> None:
+                          positive_pairs_raw: List[Tuple[str, str]],
+                          split_name: str = 'train') -> None:
         """
         从原始数据构建数据集
 
@@ -83,7 +90,17 @@ class TCMRXDataset:
         # 存储原始数据
         self.disease_targets = disease_targets_raw
         self.formula_targets = formula_targets_raw
-        self.positive_pairs = positive_pairs_raw
+        self.raw_positive_pairs = list(positive_pairs_raw)
+        self.split_name = split_name
+        self.positive_pairs = self._rebalance_positive_pairs(self.raw_positive_pairs, split_name)
+
+        if len(self.positive_pairs) != len(self.raw_positive_pairs):
+            logger.info(
+                "正样本重平衡(%s): %d -> %d",
+                split_name,
+                len(self.raw_positive_pairs),
+                len(self.positive_pairs),
+            )
 
         # 构建ID映射
         self._build_id_mappings()
@@ -137,6 +154,10 @@ class TCMRXDataset:
             'formula'
         )
 
+        penalty_cfg = filtering_cfg.get('common_target_penalty')
+        disease_penalty_cfg = self._resolve_side_config(penalty_cfg, 'disease')
+        formula_penalty_cfg = self._resolve_side_config(penalty_cfg, 'formula')
+
         freq_cfg = filtering_cfg.get('frequency_reweighting')
         disease_freq_cfg = self._resolve_side_config(freq_cfg, 'disease')
         formula_freq_cfg = self._resolve_side_config(freq_cfg, 'formula')
@@ -155,6 +176,13 @@ class TCMRXDataset:
             disease_targets_processed = self._apply_frequency_weighting(
                 disease_targets_processed,
                 disease_freq_cfg,
+                '疾病侧',
+            )
+
+        if disease_penalty_cfg:
+            disease_targets_processed = self._apply_common_target_penalty(
+                disease_targets_processed,
+                disease_penalty_cfg,
                 '疾病侧',
             )
 
@@ -180,6 +208,13 @@ class TCMRXDataset:
             formula_targets_processed = self._apply_frequency_weighting(
                 formula_targets_processed,
                 formula_freq_cfg,
+                '方剂侧',
+            )
+
+        if formula_penalty_cfg:
+            formula_targets_processed = self._apply_common_target_penalty(
+                formula_targets_processed,
+                formula_penalty_cfg,
                 '方剂侧',
             )
 
@@ -290,6 +325,81 @@ class TCMRXDataset:
 
         logger.info("%s靶点裁剪: %s", prefix, {k: v for k, v in params.items() if v is not None})
         return trim_target_sets(target_sets, **params)
+
+    def _apply_common_target_penalty(self, target_sets, penalty_cfg, prefix: str):
+        if not penalty_cfg:
+            return target_sets
+
+        if isinstance(penalty_cfg, bool):
+            return penalize_common_targets(target_sets) if penalty_cfg else target_sets
+
+        if penalty_cfg.get('enabled', True) is False:
+            logger.info("%s跳过高频靶点惩罚（配置禁用）", prefix)
+            return target_sets
+
+        params = {
+            'top_n': penalty_cfg.get('top_n', 100),
+            'multiplier': penalty_cfg.get('multiplier', 0.1),
+            'min_frequency': penalty_cfg.get('min_frequency', 1),
+            'log_prefix': f"{prefix}高频惩罚",
+        }
+        return penalize_common_targets(target_sets, **params)
+
+    def _rebalance_positive_pairs(self, positive_pairs, split_name: str):
+        sampling_cfg = self.config.get('sampling', {}).get('disease_pair_balancing', {})
+        if not sampling_cfg or sampling_cfg.get('enabled', True) is False:
+            return list(positive_pairs)
+
+        apply_to = sampling_cfg.get('apply_to', ['train'])
+        if split_name not in apply_to:
+            return list(positive_pairs)
+
+        positive_pairs = list(positive_pairs)
+        if not positive_pairs:
+            return []
+
+        high_threshold = sampling_cfg.get('high_freq_threshold', 200)
+        low_threshold = sampling_cfg.get('low_freq_threshold', 20)
+        max_high_pairs = sampling_cfg.get('max_pairs_high', 100)
+        low_multiplier = max(int(sampling_cfg.get('upsample_low_multiplier', 3)), 1)
+        medium_multiplier = max(int(sampling_cfg.get('upsample_medium_multiplier', 1)), 1)
+
+        disease_to_formulas: Dict[str, List[str]] = defaultdict(list)
+        for disease_id, formula_id in positive_pairs:
+            disease_to_formulas[disease_id].append(formula_id)
+
+        rebalanced_pairs: List[Tuple[str, str]] = []
+        high_freq_diseases = 0
+        low_freq_diseases = 0
+
+        for disease_id, formulas in disease_to_formulas.items():
+            count = len(formulas)
+            formulas_array = list(formulas)
+            self.rng.shuffle(formulas_array)
+
+            if count >= high_threshold:
+                take = min(count, max_high_pairs)
+                selected = formulas_array[:take]
+                rebalanced_pairs.extend((disease_id, fid) for fid in selected)
+                high_freq_diseases += 1
+            elif count < low_threshold:
+                for _ in range(low_multiplier):
+                    rebalanced_pairs.extend((disease_id, fid) for fid in formulas_array)
+                low_freq_diseases += 1
+            else:
+                for _ in range(medium_multiplier):
+                    rebalanced_pairs.extend((disease_id, fid) for fid in formulas_array)
+
+        logger.info(
+            "重平衡统计(%s): 高频疾病=%d, 低频疾病=%d, 原样本=%d, 新样本=%d",
+            split_name,
+            high_freq_diseases,
+            low_freq_diseases,
+            len(positive_pairs),
+            len(rebalanced_pairs),
+        )
+
+        return rebalanced_pairs
 
     def get_disease_targets(self, disease_id: str) -> List[Tuple[int, float]]:
         """

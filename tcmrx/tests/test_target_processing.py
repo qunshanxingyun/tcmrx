@@ -9,7 +9,12 @@ from tcmrx.dataio.dataset_builder import TCMRXDataset
 
 
 def build_dataset(filtering_config):
-    config = {'filtering': filtering_config}
+    config = {
+        'filtering': filtering_config,
+        'sampling': {
+            'disease_pair_balancing': {'enabled': False}
+        },
+    }
     dataset = TCMRXDataset(config)
 
     disease_targets = {
@@ -22,7 +27,7 @@ def build_dataset(filtering_config):
     }
     positive_pairs = [('d1', 'f1'), ('d2', 'f2')]
 
-    dataset.build_from_raw_data(disease_targets, formula_targets, positive_pairs)
+    dataset.build_from_raw_data(disease_targets, formula_targets, positive_pairs, split_name='train')
     return dataset
 
 

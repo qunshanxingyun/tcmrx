@@ -53,11 +53,22 @@ def test_contrastive_learning():
 
     # 数据连接
     cpms_to_chp_map = cpms_to_chp(formula_tables['D4_CPM_CHP'])
-    chp_to_chemicals_map = chp_to_chemicals(formula_tables['D9_CHP_InChIKey'], formula_tables.get('D12_InChIKey'))
+    d12_table = formula_tables.get('D12_InChIKey')
+    chp_to_chemicals_map = chp_to_chemicals(formula_tables['D9_CHP_InChIKey'], d12_table)
+    chemical_to_pathways_map = chemicals_to_pathways(d12_table)
 
     # 限制化学数据量
     sd1_df = prediction_tables['SD1_predicted'].sample(n=50000, random_state=42)
     chemical_to_targets_map = chemicals_to_targets(sd1_df)
+
+    pathway_config = config.get('pathways', {})
+    target_to_pathways_map = build_target_to_pathways(
+        chemical_to_targets_map,
+        chemical_to_pathways_map,
+        prefix=pathway_config.get('prefix', 'pathway:'),
+        max_pathways_per_target=pathway_config.get('bridge', {}).get('max_pathways_per_target', 32),
+        min_weight=pathway_config.get('bridge', {}).get('min_weight', 1e-4),
+    )
 
     icd11_to_targets_map = icd11_to_targets(
         disease_tables['D19_ICD11_CUI'],
@@ -67,8 +78,18 @@ def test_contrastive_learning():
     )
 
     # 构建靶点集合
-    formula_targets_raw = formulas_to_targets(cpms_to_chp_map, chp_to_chemicals_map, chemical_to_targets_map)
-    disease_targets_raw = diseases_to_targets(icd11_to_targets_map)
+    formula_targets_raw = formulas_to_targets(
+        cpms_to_chp_map,
+        chp_to_chemicals_map,
+        chemical_to_targets_map,
+        chemical_to_pathways_map=chemical_to_pathways_map,
+        pathway_config=pathway_config,
+    )
+    disease_targets_raw = diseases_to_targets(
+        icd11_to_targets_map,
+        target_to_pathways_map=target_to_pathways_map,
+        pathway_config=pathway_config,
+    )
 
     # 获取监督对并限制数量
     cpms_to_icd11_map = cpms_to_icd11(formula_tables['D5_CPM_ICD11'])
@@ -83,7 +104,7 @@ def test_contrastive_learning():
 
     # 构建数据集
     dataset = TCMRXDataset(config)
-    dataset.build_from_raw_data(disease_targets_raw, formula_targets_raw, positive_pairs_raw)
+    dataset.build_from_raw_data(disease_targets_raw, formula_targets_raw, positive_pairs_raw, split_name='train')
 
     logger.info(f"数据集构建完成: {dataset}")
 

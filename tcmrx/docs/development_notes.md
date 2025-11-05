@@ -36,4 +36,3 @@
 ## 8. 网格搜索工具
 - `python -m tcmrx.scripts.hparam_search` 会针对常见的截断/频率参数建立网格，并顺序调用 `run_train.py`。可通过 `--grid` 指定 YAML 文件自定义网格，或使用 `--dry-run` 查看组合列表后再执行。
 - 建议配合 `scripts/analyze_dataset.py` 的诊断结果筛选参数范围，并在搜索结果中保留指标日志以便对比。
-- `scripts/analyze_dataset.py` 复用训练前处理逻辑输出靶点分布、链接多重度与正样本靶点重叠度，推荐在调参前先运行 `python -m scripts.analyze_dataset --output data/analysis.json` 获取定量诊断。该脚本的结构便于后续添加新的统计项或导出硬负样本候选列表。
