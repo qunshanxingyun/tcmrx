@@ -1,0 +1,200 @@
+
+        self.processed_disease_targets = disease_targets_processed
+
+        # 处理方剂�?
+        formula_targets_processed = self.formula_targets.copy()
+
+        if formula_freq_cfg:
+            formula_targets_processed = self._apply_frequency_weighting(
+                formula_targets_processed,
+                formula_freq_cfg,
+                '方剂�?,
+            )
+
+        if formula_penalty_cfg:
+            formula_targets_processed = self._apply_common_target_penalty(
+                formula_targets_processed,
+                formula_penalty_cfg,
+                '方剂�?,
+            )
+
+        if formula_trim_cfg:
+            formula_targets_processed = self._apply_trimming(
+                formula_targets_processed,
+                formula_trim_cfg,
+                '方剂�?,
+            )
+        elif topk_f:
+            formula_targets_processed = apply_topk_to_set(
+                formula_targets_processed, topk_f, sort_by='weight')
+
+        # 权重归一�?
+        formula_targets_processed = normalize_weights(formula_targets_processed)
+
+        self.processed_formula_targets = formula_targets_processed
+
+    def _build_training_samples(self) -> None:
+        """构建训练样本（仅正样本，负采样在batch中生成）"""
+        logger.info("构建训练样本...")
+
+        valid_pairs = []
+
+        for disease_id, formula_id in self.positive_pairs:
+            # 确保两侧都有靶点信息
+            if (disease_id in self.processed_disease_targets and
+                formula_id in self.processed_formula_targets):
+
+                # 确保靶点集合非空
+                if (self.processed_disease_targets[disease_id] and
+                    self.processed_formula_targets[formula_id]):
+
+                    valid_pairs.append(TrainingSample(disease_id, formula_id, 1))
+
+        self.training_samples = valid_pairs
+        logger.info(f"有效正样�? {len(valid_pairs)} / {len(self.positive_pairs)} "
+                   f"({len(valid_pairs)/len(self.positive_pairs)*100:.1f}%)")
+
+    @staticmethod
+    def _resolve_side_config(config_value, side: str):
+        if config_value is None:
+            return None
+
+        if isinstance(config_value, bool):
+            return {} if config_value else None
+
+        if not isinstance(config_value, dict):
+            return config_value
+
+        if side in config_value:
+            return config_value.get(side)
+
+        has_side_keys = any(k in config_value for k in ('disease', 'formula'))
+        if has_side_keys:
+            return None
+
+        return config_value
+
+    def _apply_frequency_weighting(self, target_sets, freq_cfg, prefix: str):
+        if not freq_cfg:
+            return target_sets
+
+        if isinstance(freq_cfg, bool):
+            if not freq_cfg:
+                return target_sets
+            freq_cfg = {}
+
+        if freq_cfg.get('enabled', True) is False:
+            logger.info("%s跳过频率重加权（配置禁用�?, prefix)
+            return target_sets
+
+        freq_weights = compute_frequency_weights(
+            target_sets,
+            method=freq_cfg.get('method', 'idf'),
+            smooth=freq_cfg.get('smooth', 1.0),
+            power=freq_cfg.get('power', 1.0),
+            min_weight=freq_cfg.get('min_weight'),
+            max_weight=freq_cfg.get('max_weight'),
+            base=freq_cfg.get('base', math.e),
+        )
+
+        blend = freq_cfg.get('blend', 1.0)
+        normalize = freq_cfg.get('normalize', False)
+
+        logger.info("%s应用频率重加�? method=%s, blend=%.2f", prefix, freq_cfg.get('method', 'idf'), blend)
+        return apply_frequency_weights(target_sets, freq_weights, blend=blend, normalize=normalize)
+
+    def _apply_trimming(self, target_sets, trim_cfg, prefix: str):
+        if not trim_cfg:
+            return target_sets
+
+        if isinstance(trim_cfg, bool):
+            return target_sets if not trim_cfg else trim_target_sets(target_sets)
+
+        if trim_cfg.get('enabled', True) is False:
+            logger.info("%s跳过靶点裁剪（配置禁用）", prefix)
+            return target_sets
+
+        params = {
+            'max_items': trim_cfg.get('max_items'),
+            'min_items': trim_cfg.get('min_items', 0),
+            'mass_threshold': trim_cfg.get('mass_threshold'),
+            'weight_floor': trim_cfg.get('weight_floor'),
+            'sort_by': trim_cfg.get('sort_by', 'weight'),
+            'log_prefix': f"{prefix}",
+        }
+
+        logger.info("%s靶点裁剪: %s", prefix, {k: v for k, v in params.items() if v is not None})
+        return trim_target_sets(target_sets, **params)
+
+    def _apply_common_target_penalty(self, target_sets, penalty_cfg, prefix: str):
+        if not penalty_cfg:
+            return target_sets
+
+        if isinstance(penalty_cfg, bool):
+            return penalize_common_targets(target_sets) if penalty_cfg else target_sets
+
+        if penalty_cfg.get('enabled', True) is False:
+            logger.info("%s跳过高频靶点惩罚（配置禁用）", prefix)
+            return target_sets
+
+        params = {
+            'top_n': penalty_cfg.get('top_n', 100),
+            'multiplier': penalty_cfg.get('multiplier', 0.1),
+            'min_frequency': penalty_cfg.get('min_frequency', 1),
+            'log_prefix': f"{prefix}高频惩罚",
+        }
+        return penalize_common_targets(target_sets, **params)
+
+    def _rebalance_positive_pairs(self, positive_pairs, split_name: str):
+        sampling_cfg = self.config.get('sampling', {}).get('disease_pair_balancing', {})
+        if not sampling_cfg or sampling_cfg.get('enabled', True) is False:
+            return list(positive_pairs)
+
+        apply_to = sampling_cfg.get('apply_to', ['train'])
+        if split_name not in apply_to:
+            return list(positive_pairs)
+
+        positive_pairs = list(positive_pairs)
+        if not positive_pairs:
+            return []
+
+        high_threshold = sampling_cfg.get('high_freq_threshold', 200)
+        low_threshold = sampling_cfg.get('low_freq_threshold', 20)
+        max_high_pairs = sampling_cfg.get('max_pairs_high', 100)
+        low_multiplier = max(int(sampling_cfg.get('upsample_low_multiplier', 3)), 1)
+        medium_multiplier = max(int(sampling_cfg.get('upsample_medium_multiplier', 1)), 1)
+
+        disease_to_formulas: Dict[str, List[str]] = defaultdict(list)
+        for disease_id, formula_id in positive_pairs:
+            disease_to_formulas[disease_id].append(formula_id)
+
+        rebalanced_pairs: List[Tuple[str, str]] = []
+        high_freq_diseases = 0
+        low_freq_diseases = 0
+
+        for disease_id, formulas in disease_to_formulas.items():
+            count = len(formulas)
+            formulas_array = list(formulas)
+            self.rng.shuffle(formulas_array)
+
+            if count >= high_threshold:
+                take = min(count, max_high_pairs)
+                selected = formulas_array[:take]
+                rebalanced_pairs.extend((disease_id, fid) for fid in selected)
+                high_freq_diseases += 1
+            elif count < low_threshold:
+                for _ in range(low_multiplier):
+                    rebalanced_pairs.extend((disease_id, fid) for fid in formulas_array)
+                low_freq_diseases += 1
+            else:
+                for _ in range(medium_multiplier):
+                    rebalanced_pairs.extend((disease_id, fid) for fid in formulas_array)
+
+        logger.info(
+            "重平衡统�?%s): 高频疾病=%d, 低频疾病=%d, 原样�?%d, 新样�?%d",
+            split_name,
+            high_freq_diseases,
+            low_freq_diseases,
+            len(positive_pairs),
+            len(rebalanced_pairs),
+        )

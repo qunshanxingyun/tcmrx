@@ -46,6 +46,42 @@ def info_nce(similarities: torch.Tensor,
     return loss
 
 
+def multi_positive_info_nce(similarities: torch.Tensor,
+                            row_labels: torch.Tensor,
+                            temperature: float = 0.1) -> torch.Tensor:
+    """
+    Multi-positive InfoNCE where each row may have multiple positives in-batch.
+
+    Args:
+        similarities: [batch, batch] cosine similarities (unscaled)
+        row_labels: [batch] labels identifying which rows share the same disease
+        temperature: temperature for scaling
+
+    Returns:
+        scalar loss
+    """
+    if temperature <= 0:
+        raise ValueError(f"温度参数必须大于0，当前为 {temperature}")
+
+    # Positive mask: treat any sample with same disease label as positive for the row
+    # pos_mask[i, j] = True if disease_i == disease_j
+    pos_mask = row_labels.unsqueeze(1) == row_labels.unsqueeze(0)  # [B, B]
+
+    # Scale logits
+    logits = similarities / temperature
+
+    # logsumexp over all columns (denominator)
+    logsumexp_all = torch.logsumexp(logits, dim=1)  # [B]
+
+    # Mask logits for positives; avoid -inf when a row has no positives (shouldn't happen)
+    masked_logits = logits.masked_fill(~pos_mask, float('-inf'))
+    logsumexp_pos = torch.logsumexp(masked_logits, dim=1)  # [B]
+
+    # Loss = - (log sum exp positives - log sum exp all)
+    loss = -(logsumexp_pos - logsumexp_all).mean()
+    return loss
+
+
 class InfoNCELoss(nn.Module):
     """
     InfoNCE对比损失模块
@@ -126,7 +162,8 @@ class ContrastiveAccuracy(nn.Module):
 
     def forward(self,
                 disease_embeddings: torch.Tensor,
-                formula_embeddings: torch.Tensor) -> torch.Tensor:
+                formula_embeddings: torch.Tensor,
+                row_labels: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         计算对比准确率
 
@@ -144,8 +181,13 @@ class ContrastiveAccuracy(nn.Module):
             # 对于每个疾病样本，预测最匹配的方剂
             predicted = similarities.argmax(dim=1)
 
-            # 正确答案是对角线
-            correct = (predicted == torch.arange(len(predicted), device=predicted.device)).float()
+            if row_labels is None:
+                # 对角线为唯一正样本
+                correct = (predicted == torch.arange(len(predicted), device=predicted.device)).float()
+            else:
+                # multi-positive: any column j with same label is positive for row i
+                pos_mask = row_labels.unsqueeze(1) == row_labels.unsqueeze(0)
+                correct = pos_mask[torch.arange(len(predicted)), predicted].float()
 
             accuracy = correct.mean()
 
@@ -154,7 +196,8 @@ class ContrastiveAccuracy(nn.Module):
 
 def compute_contrastive_metrics(disease_embeddings: torch.Tensor,
                                formula_embeddings: torch.Tensor,
-                               temperature: float = 0.1) -> dict:
+                               temperature: float = 0.1,
+                               row_labels: Optional[torch.Tensor] = None) -> dict:
     """
     计算对比学习相关指标
 
@@ -174,13 +217,19 @@ def compute_contrastive_metrics(disease_embeddings: torch.Tensor,
         # 计算相似度矩阵
         similarities = torch.mm(disease_embeddings, formula_embeddings.t())
 
-        # InfoNCE损失
-        labels = torch.arange(len(similarities), device=similarities.device)
-        loss = info_nce(similarities, temperature, labels)
-
-        # 准确率
-        predicted = similarities.argmax(dim=1)
-        accuracy = (predicted == labels).float().mean()
+        # InfoNCE损失（multi-positive 感知）
+        if row_labels is None:
+            labels = torch.arange(len(similarities), device=similarities.device)
+            loss = info_nce(similarities, temperature, labels)
+            # 准确率（单正样本）
+            predicted = similarities.argmax(dim=1)
+            accuracy = (predicted == labels).float().mean()
+        else:
+            loss = multi_positive_info_nce(similarities, row_labels, temperature)
+            # 多正样本准确率：预测命中任一正样本即视为正确
+            predicted = similarities.argmax(dim=1)
+            pos_mask = row_labels.unsqueeze(1) == row_labels.unsqueeze(0)
+            accuracy = pos_mask[torch.arange(len(predicted)), predicted].float().mean()
 
         # 平均相似度（正样本）
         positive_similarities = similarities[torch.arange(len(similarities))]

@@ -85,11 +85,6 @@ def main():
             model_config = config['model']
 
         model = DualTowerModel(model_config)
-        model.load_state_dict(checkpoint['model_state_dict'])
-        model = model.to(device)
-        model.eval()
-
-        logger.info(f"模型加载完成，epoch: {checkpoint.get('epoch', 'unknown')}")
 
         # 3. 读取数据
         logger.info("读取数据...")
@@ -172,6 +167,14 @@ def main():
         logger.info(f"构建{args.data_split}数据集...")
         dataset = TCMRXDataset(config)
         dataset.build_from_raw_data(disease_targets_raw, formula_targets_raw, eval_pairs, split_name='eval')
+
+        # 在加载权重前，先设置实体数量以实例化编码器参数
+        disease_indices, formula_indices, num_targets = dataset.get_entity_indices()
+        model.set_entity_counts(len(disease_indices), len(formula_indices), num_targets)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        model = model.to(device)
+        model.eval()
+        logger.info(f"模型加载完成，epoch: {checkpoint.get('epoch', 'unknown')}")
 
         # 7. 创建数据加载器
         logger.info("创建数据加载器...")

@@ -148,7 +148,7 @@ def collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
     }
 
 
-def create_data_loaders(train_dataset: 'TCMRXDatasetBuilder',
+def create_data_loaders(train_dataset: 'TCMRXDatasetBuilder' = None,
                        val_dataset: 'TCMRXDatasetBuilder' = None,
                        batch_size: int = 256,
                        num_workers: int = 4,
@@ -166,20 +166,22 @@ def create_data_loaders(train_dataset: 'TCMRXDatasetBuilder',
     Returns:
         (train_loader, val_loader)
     """
-    # 创建PyTorch数据集
-    train_pytorch_dataset = TCMRXDataset(train_dataset, mode='train')
+    # 创建PyTorch数据集（允许train_dataset为None）
+    train_pytorch_dataset = TCMRXDataset(train_dataset, mode='train') if train_dataset else None
     val_pytorch_dataset = TCMRXDataset(val_dataset, mode='val') if val_dataset else None
 
     # 创建数据加载器
-    train_loader = DataLoader(
-        train_pytorch_dataset,
-        batch_size=batch_size,
-        shuffle=True,  # 恢复shuffle，每个epoch重新随机排列
-        collate_fn=collate_fn,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-        drop_last=True  # 确保批大小一致
-    )
+    train_loader = None
+    if train_pytorch_dataset is not None:
+        train_loader = DataLoader(
+            train_pytorch_dataset,
+            batch_size=batch_size,
+            shuffle=True,  # 恢复shuffle，每个epoch重新随机排列
+            collate_fn=collate_fn,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+            drop_last=True  # 确保批大小一致
+        )
 
     val_loader = None
     if val_pytorch_dataset is not None:

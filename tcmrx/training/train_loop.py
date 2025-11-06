@@ -12,7 +12,7 @@ import logging
 from typing import Dict, Optional
 from tqdm import tqdm
 
-from core.losses import compute_contrastive_metrics
+from core.losses import compute_contrastive_metrics, multi_positive_info_nce
 from core.utils import save_checkpoint, format_time
 
 logger = logging.getLogger(__name__)
@@ -74,7 +74,8 @@ class TrainingLoop:
         # 进度条
         pbar = tqdm(self.train_loader, desc=f"Epoch {self.current_epoch + 1} Training")
 
-        loss_fn = nn.CrossEntropyLoss()
+        # 使用多正样本感知的InfoNCE，避免同一疾病在同批出现时将真阳性当作负样本
+        ce_loss_fn = nn.CrossEntropyLoss()
 
         for batch_idx, batch in enumerate(pbar):
             # 移动数据到设备
@@ -85,9 +86,11 @@ class TrainingLoop:
             if self.mixed_precision:
                 with torch.cuda.amp.autocast():
                     outputs = self.model(batch)
-                    similarities = outputs['scaled_similarities']
-                    labels = torch.arange(len(similarities), device=similarities.device)
-                    loss = loss_fn(similarities, labels)
+                    # 原始相似度（未缩放）用于自定义InfoNCE；也保留scaled用于参照
+                    similarities = outputs['similarities']
+                    # 多正样本：行标签为疾病索引
+                    row_labels = batch['disease_indices']
+                    loss = multi_positive_info_nce(similarities, row_labels, temperature=self.model.get_temperature())
 
                 self.scaler.scale(loss).backward()
                 self.scaler.unscale_(self.optimizer)
@@ -96,9 +99,9 @@ class TrainingLoop:
                 self.scaler.update()
             else:
                 outputs = self.model(batch)
-                similarities = outputs['scaled_similarities']
-                labels = torch.arange(len(similarities), device=similarities.device)
-                loss = loss_fn(similarities, labels)
+                similarities = outputs['similarities']
+                row_labels = batch['disease_indices']
+                loss = multi_positive_info_nce(similarities, row_labels, temperature=self.model.get_temperature())
 
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
@@ -108,7 +111,8 @@ class TrainingLoop:
                 metrics = compute_contrastive_metrics(
                     outputs['disease_embeddings'],
                     outputs['formula_embeddings'],
-                    temperature=self.model.get_temperature()
+                    temperature=self.model.get_temperature(),
+                    row_labels=batch['disease_indices']
                 )
 
             # 累计损失
@@ -160,12 +164,9 @@ class TrainingLoop:
 
                 # 前向传播
                 outputs = self.model(batch)
-                similarities = outputs['scaled_similarities']
-
-                # 计算损失
-                labels = torch.arange(len(similarities), device=similarities.device)
-                loss_fn = nn.CrossEntropyLoss()
-                loss = loss_fn(similarities, labels)
+                similarities = outputs['similarities']
+                row_labels = batch['disease_indices']
+                loss = multi_positive_info_nce(similarities, row_labels, temperature=self.model.get_temperature())
 
                 val_loss += loss.item()
 
@@ -173,7 +174,8 @@ class TrainingLoop:
                 metrics = compute_contrastive_metrics(
                     outputs['disease_embeddings'],
                     outputs['formula_embeddings'],
-                    temperature=self.model.get_temperature()
+                    temperature=self.model.get_temperature(),
+                    row_labels=batch['disease_indices']
                 )
 
                 # 累积指标

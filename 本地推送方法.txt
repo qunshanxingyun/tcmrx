@@ -1,0 +1,51 @@
+本地改代码 → 推 GitHub → 推 Gitee
+# 1) 先把本地 main 对齐 GitHub（避免你在旧基线上改）
+git fetch github --prune
+git switch main
+git pull --ff-only github main
+
+# 2) 本地改代码后提交
+git add -A
+git commit -m "feat/fix: <your change>"
+
+# 3) 推到 GitHub（权威源）
+git push github main
+
+# 4) 镜像到 Gitee（给服务器用）
+git push gitee main
+
+
+若第 3 步/第 4 步提示“non-fast-forward”，说明远端又有人先推了：先 git pull --ff-only 对齐再重试。
+
+本地和远端有分叉（不能 fast-forward）时
+# 拉最新 + 合并
+git fetch github --prune
+git pull github main         # 这里可能出现冲突 → 手动改文件、git add、git commit
+
+# 合并完成后再推
+git push github main
+git push gitee  main
+
+与 Codex PR 并行时的顺序（本地也有改动）
+
+先把 GitHub/main 拉到本地（同上第 1 步）。
+
+先合 Codex PR（按你刚才那段“本地解决 PR 冲突流程”合入到 main 并 git push github main）。
+
+再在这个最新的 main 上做你的改动并提交、推送（如上“本地改代码 → 推 GitHub → 推 Gitee”）。
+
+最后 git push gitee main，服务器 git pull origin main。
+
+服务器仍然只拉 Gitee
+git fetch origin --prune
+git checkout main
+git pull --ff-only origin main
+
+快速自检（可选）
+# 本地确认三方一致
+git fetch github --prune; git fetch gitee --prune
+git rev-list --left-right --count github/main...HEAD   # 0 0 代表本地=GitHub
+git rev-list --left-right --count github/main...gitee/main  # 0 0 代表GitHub=Gitee
+
+
+牢记：GitHub 是权威写源；你本地的任何改动先推 GitHub，再推 Gitee；服务器只从 Gitee 拉。这和你之前的流程完全兼容，只是现在“本地”也能成为改动来源了。

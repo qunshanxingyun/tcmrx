@@ -1,0 +1,200 @@
+"""
+TCM-RX 数据集构建模�?
+组装 (Disease, Formula) 训练/验证样本
+"""
+
+from typing import Dict, List, Tuple, Set
+import numpy as np
+import logging
+import math
+from collections import defaultdict
+
+from .id_maps import IDMapper
+from .filters import (
+    apply_topk_to_set,
+    compute_inverse_freq,
+    apply_inverse_freq_weights,
+    normalize_weights,
+    trim_target_sets,
+    compute_frequency_weights,
+    apply_frequency_weights,
+    penalize_common_targets,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class TrainingSample:
+    """训练样本数据结构"""
+
+    def __init__(self, disease_id: str, formula_id: str, label: int = 1):
+        self.disease_id = disease_id
+        self.formula_id = formula_id
+        self.label = label
+
+    def __repr__(self):
+        return f"TrainingSample(disease={self.disease_id}, formula={self.formula_id}, label={self.label})"
+
+
+class TCMRXDataset:
+    """
+    TCM-RX训练数据�?
+
+    负责�?
+    1. 构建ID映射
+    2. 处理疾病/方剂靶点集合
+    3. 组装训练样本
+    4. 应用过滤和权�?
+    """
+
+    def __init__(self, config: Dict):
+        """
+        初始化数据集构建�?
+
+        Args:
+            config: 配置字典
+        """
+        self.config = config
+        self.id_mapper = IDMapper()
+
+        # 原始数据
+        self.disease_targets = {}  # {disease_id: [(target_id, weight), ...]}
+        self.formula_targets = {}  # {formula_id: [(target_id, weight), ...]}
+        self.raw_positive_pairs: List[Tuple[str, str]] = []
+        self.positive_pairs: List[Tuple[str, str]] = []
+
+        # 处理后的数据
+        self.processed_disease_targets = {}
+        self.processed_formula_targets = {}
+        self.training_samples = []
+
+        seed = config.get('training', {}).get('seed', 42)
+        self.rng = np.random.default_rng(seed)
+        self.split_name = 'train'
+
+    def build_from_raw_data(self,
+                          disease_targets_raw: Dict[str, List[Tuple[str, float]]],
+                          formula_targets_raw: Dict[str, List[Tuple[str, float]]],
+                          positive_pairs_raw: List[Tuple[str, str]],
+                          split_name: str = 'train') -> None:
+        """
+        从原始数据构建数据集
+
+        Args:
+            disease_targets_raw: 疾病靶点集合
+            formula_targets_raw: 方剂靶点集合
+            positive_pairs_raw: 正样本对
+        """
+        logger.info("开始构建TCM-RX数据�?..")
+
+        # 存储原始数据
+        self.disease_targets = disease_targets_raw
+        self.formula_targets = formula_targets_raw
+        self.raw_positive_pairs = list(positive_pairs_raw)
+        self.split_name = split_name
+        self.positive_pairs = self._rebalance_positive_pairs(self.raw_positive_pairs, split_name)
+
+        if len(self.positive_pairs) != len(self.raw_positive_pairs):
+            logger.info(
+                "正样本重平衡(%s): %d -> %d",
+                split_name,
+                len(self.raw_positive_pairs),
+                len(self.positive_pairs),
+            )
+
+        # 构建ID映射
+        self._build_id_mappings()
+
+        # 处理靶点集合
+        self._process_target_sets()
+
+        # 组装训练样本
+        self._build_training_samples()
+
+        logger.info(f"数据集构建完�? {len(self.training_samples)} 个训练样�?)
+
+    def _build_id_mappings(self) -> None:
+        """构建稳定的ID映射"""
+        logger.info("构建ID映射...")
+
+        # 收集所有实体ID
+        all_diseases = set(self.disease_targets.keys())
+        all_formulas = set(self.formula_targets.keys())
+        all_targets = set()
+
+        for targets in self.disease_targets.values():
+            all_targets.update(tid for tid, _ in targets)
+
+        for targets in self.formula_targets.values():
+            all_targets.update(tid for tid, _ in targets)
+
+        # 添加到映射器
+        self.id_mapper.add_ids('disease', all_diseases)
+        self.id_mapper.add_ids('formula', all_formulas)
+        self.id_mapper.add_ids('target', all_targets)
+
+        # 打印统计信息
+        self.id_mapper.print_stats()
+
+    def _process_target_sets(self) -> None:
+        """处理靶点集合：过滤、加权、截�?""
+        logger.info("处理靶点集合...")
+
+        filtering_cfg = self.config.get('filtering', {})
+        topk_d = filtering_cfg.get('topk_d')
+        topk_f = filtering_cfg.get('topk_f')
+        inverse_freq_weight = filtering_cfg.get('inverse_freq_weight', True)
+
+        disease_trim_cfg = self._resolve_side_config(
+            filtering_cfg.get('disease_target_trimming'),
+            'disease'
+        )
+        formula_trim_cfg = self._resolve_side_config(
+            filtering_cfg.get('formula_target_trimming'),
+            'formula'
+        )
+
+        penalty_cfg = filtering_cfg.get('common_target_penalty')
+        disease_penalty_cfg = self._resolve_side_config(penalty_cfg, 'disease')
+        formula_penalty_cfg = self._resolve_side_config(penalty_cfg, 'formula')
+
+        freq_cfg = filtering_cfg.get('frequency_reweighting')
+        disease_freq_cfg = self._resolve_side_config(freq_cfg, 'disease')
+        formula_freq_cfg = self._resolve_side_config(freq_cfg, 'formula')
+
+        # 处理疾病�?
+        disease_targets_processed = self.disease_targets.copy()
+
+        # 逆频重加�?
+        if inverse_freq_weight:
+            logger.info("计算疾病侧逆频权重...")
+            inverse_freq_weights = compute_inverse_freq(disease_targets_processed)
+            disease_targets_processed = apply_inverse_freq_weights(
+                disease_targets_processed, inverse_freq_weights)
+
+        if disease_freq_cfg:
+            disease_targets_processed = self._apply_frequency_weighting(
+                disease_targets_processed,
+                disease_freq_cfg,
+                '疾病�?,
+            )
+
+        if disease_penalty_cfg:
+            disease_targets_processed = self._apply_common_target_penalty(
+                disease_targets_processed,
+                disease_penalty_cfg,
+                '疾病�?,
+            )
+
+        if disease_trim_cfg:
+            disease_targets_processed = self._apply_trimming(
+                disease_targets_processed,
+                disease_trim_cfg,
+                '疾病�?,
+            )
+        elif topk_d:
+            disease_targets_processed = apply_topk_to_set(
+                disease_targets_processed, topk_d, sort_by='weight')
+
+        # 权重归一�?
+        disease_targets_processed = normalize_weights(disease_targets_processed)
